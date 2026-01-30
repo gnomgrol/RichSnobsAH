@@ -1,0 +1,19 @@
+## Interface: 20504
+## Title: RichSnobsAH
+## Notes: Crafting and Auction House helper for groups and reagents.
+## Author: You
+## Version: 1.0
+## SavedVariables: RichSnobsAHDB
+
+Data.lua
+Money.lua
+AHResults.lua
+PostPane.lua
+UndercutPane.lua
+MainAHPanel.lua
+FullScan.lua
+Hooks.lua
+RichSnobsAH.lua
+Minimap.lua
+MainFrame.lua
+CraftingHook.lua
