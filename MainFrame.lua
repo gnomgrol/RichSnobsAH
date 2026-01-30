@@ -38,6 +38,7 @@ function addon:CreateMainFrame()
     -- AH Events (Safe registration)
     frame:RegisterEvent("AUCTION_HOUSE_SHOW")
     frame:RegisterEvent("AUCTION_HOUSE_CLOSED")
+    frame:RegisterEvent("PLAYER_REGEN_DISABLED")
     pcall(function() frame:RegisterEvent("AUCTION_DISPLAY_SHOW") end)
     pcall(function() frame:RegisterEvent("AUCTION_FRAME_SHOW") end)
     pcall(function() frame:RegisterEvent("AUCTION_FRAME_CLOSED") end)
@@ -52,6 +53,10 @@ function addon:CreateMainFrame()
             addon.isAHStateOpen = false
             if addon.mainAHPanel then addon.mainAHPanel:Hide() end
             if frame.fullScanBtn then frame.fullScanBtn:Disable() end
+        elseif event == "PLAYER_REGEN_DISABLED" then
+            if frame:IsShown() then
+                addon:ToggleMainFrame()
+            end
         end
         
         if self:IsShown() then
@@ -454,6 +459,10 @@ function addon:CreateMainFrame()
              end
         end)
         row.postItemBtn = postItemBtn
+
+        local profitStr = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        profitStr:SetPoint("RIGHT", postItemBtn, "LEFT", -5, 0)
+        row.profitText = profitStr
         
         -- Reagents container (initially hidden)
         local reagentFrame = CreateFrame("Frame", nil, row)
@@ -625,17 +634,25 @@ function addon:RefreshMainFrame()
                 end
 
                 local profit = (sellPrice or 0) - craftCost
-                local profitText = ""
                 
                 if craftCost > 0 and sellPrice > 0 then
                     local color = (profit > 0) and "|cff00ff00" or "|cffff0000"
-                    profitText = "  " .. color .. "P: " .. addon:FormatMoney(profit, true) .. "|r"
+                    row.profitText:SetText(color .. "P: " .. addon:FormatMoney(profit, true) .. "|r")
                 elseif craftCost > 0 then
-                    profitText = "  |cffccccccC: " .. addon:FormatMoney(craftCost, true) .. "|r"
+                    row.profitText:SetText("|cffccccccC: " .. addon:FormatMoney(craftCost, true) .. "|r")
+                else
+                    row.profitText:SetText("")
                 end
 
-                row.name:SetText((item.link or "Unknown Item") .. craftText .. profitText)
+                row.name:SetText((item.link or "Unknown Item") .. craftText)
                 row.icon:SetTexture(item.texture or "Interface\\Icons\\Inv_Misc_QuestionMark")
+
+                -- Enable/Disable Post button based on AH state
+                if addon:IsAHOpen() then
+                    row.postItemBtn:Enable()
+                else
+                    row.postItemBtn:Disable()
+                end
                 
                 -- Setup Reagents
                 if item.expanded then
