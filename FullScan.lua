@@ -8,7 +8,7 @@ function addon:StartFullScan()
         return
     end
 
-    local trackedNamesMap = addon:GetAllTrackedItemNames()
+    local trackedNamesMap = addon:GetAllTrackedItemNames(addon.db.selectedGroupIndex)
     local trackedNames = {}
     for name, _ in pairs(trackedNamesMap) do
         table.insert(trackedNames, name)
@@ -26,6 +26,7 @@ function addon:StartFullScan()
     if addon.undercutBtn then addon.undercutBtn:Disable() end
     if addon.postBtn then addon.postBtn:Disable() end
     if addon.importBtn then addon.importBtn:Disable() end
+    if addon.addItemBtn then addon.addItemBtn:Disable() end
 
     local currentIndex = 1
     local lastPrintedIndex = 0
@@ -131,4 +132,5 @@ function addon:EndFullScan()
     if addon.undercutBtn then addon.undercutBtn:Enable() end
     if addon.postBtn then addon.postBtn:Enable() end
     if addon.importBtn then addon.importBtn:Enable() end
+    if addon.addItemBtn then addon.addItemBtn:Enable() end
 end

@@ -289,33 +289,15 @@ function addon:SelectPostItem(item)
         defaultStack = stack or 1
     end
     
-    -- Count total in bags only (0 to 4)
-    local totalCount = 0
-    for b = 0, 4 do
-        local numSlots = (C_Container and C_Container.GetContainerNumSlots(b)) or (_G.GetContainerNumSlots and _G.GetContainerNumSlots(b)) or GetContainerNumSlots(b)
-        for s = 1, numSlots do
-            local link
-            if C_Container and C_Container.GetContainerItemLink then
-                link = C_Container.GetContainerItemLink(b, s)
-            else
-                link = GetContainerItemLink(b, s)
-            end
-            if link and link:find("item:" .. (item.link:match("item:(%d+)") or ""), 1, true) then
-                local count
-                if C_Container and C_Container.GetContainerItemInfo then
-                    local info = C_Container.GetContainerItemInfo(b, s)
-                    count = info and info.stackCount or 0
-                else
-                    local _, itemCount = GetContainerItemInfo(b, s)
-                    count = itemCount or 0
-                end
-                totalCount = totalCount + count
-            end
-        end
-    end
+    -- Count total in bags
+    local totalCount = self:GetBagItemCount(item.link)
     
-    self.postPane.stackSizeEdit:SetText(tostring(defaultStack))
-    self.postPane.numStacksEdit:SetText(tostring(math.max(1, math.floor(totalCount / defaultStack))))
+    -- Use smaller of default stack or total count as initial stack size
+    local initialStack = math.min(defaultStack, totalCount)
+    if initialStack < 1 then initialStack = 1 end
+    
+    self.postPane.stackSizeEdit:SetText(tostring(initialStack))
+    self.postPane.numStacksEdit:SetText(tostring(math.max(1, math.floor(totalCount / initialStack))))
     
     -- Start AH scan for prices
     if itemName then
@@ -338,29 +320,7 @@ function addon:UpdatePostButtonText()
             self.postPane.postBtn:Disable()
         else
             -- Only enable if we actually have enough items for at least one stack in BAGS
-            local totalCount = 0
-            for b = 0, 4 do
-                local numSlots = (C_Container and C_Container.GetContainerNumSlots(b)) or (_G.GetContainerNumSlots and _G.GetContainerNumSlots(b)) or GetContainerNumSlots(b)
-                for s = 1, numSlots do
-                    local link
-                    if C_Container and C_Container.GetContainerItemLink then
-                        link = C_Container.GetContainerItemLink(b, s)
-                    else
-                        link = GetContainerItemLink(b, s)
-                    end
-                    if link and link:find("item:" .. (self.postPane.selectedItem.link:match("item:(%d+)") or ""), 1, true) then
-                        local count
-                        if C_Container and C_Container.GetContainerItemInfo then
-                            local info = C_Container.GetContainerItemInfo(b, s)
-                            count = info and info.stackCount or 0
-                        else
-                            local _, itemCount = GetContainerItemInfo(b, s)
-                            count = itemCount or 0
-                        end
-                        totalCount = totalCount + count
-                    end
-                end
-            end
+            local totalCount = self:GetBagItemCount(self.postPane.selectedItem.link)
 
             if totalCount >= stackSize then
                 self.postPane.postBtn:Enable()
@@ -424,15 +384,16 @@ function addon:SelectAHPrice(data)
 
     -- Use this unit price as the base for undercutting
     local unitPrice = data.unitPrice
+    local unitBid = data.unitBid or unitPrice
     
     -- Undercut by 1 copper (ensure it's integer)
     local suggestedBuyout = math.floor(unitPrice - 1)
     if suggestedBuyout < 1 then suggestedBuyout = 1 end
     
-    -- Bid: same undercut, but cap at 80% of buyout
-    local suggestedBid = suggestedBuyout 
-    local minBid = math.floor(suggestedBuyout * 0.95) -- Higher bid to discourage bidding
-    if suggestedBid < minBid then suggestedBid = minBid end
+    -- Bid: undercut target bid by 1 copper, but cap at buyout
+    local suggestedBid = math.floor(unitBid - 1)
+    if suggestedBid < 1 then suggestedBid = 1 end
+    if suggestedBid > suggestedBuyout then suggestedBid = suggestedBuyout end
     
     self.postPane.suggestedBuyout = suggestedBuyout
     self.postPane.suggestedBid = suggestedBid
@@ -443,6 +404,7 @@ function addon:SelectAHPrice(data)
     end
     
     self:RefreshPostAHList()
+    self:UpdatePostButtonText()
 end
 
 -- Scan for item price
@@ -501,20 +463,22 @@ end
 function addon:ProcessPostScanResults(itemName)
     local batchCount, totalCount = GetNumAuctionItems("list")
     local minBuyoutUnit = nil
+    local minBidUnit = nil
     local results = {}
     local groupedMap = {}
 
     for i = 1, batchCount do
-        local name, texture, count, _, _, _, _, _, _, buyout, _, _, _, owner = GetAuctionItemInfo("list", i)
+        local name, texture, count, _, _, _, _, bid, _, buyout, _, _, _, owner = GetAuctionItemInfo("list", i)
         local itemLink = GetAuctionItemLink("list", i)
         
         -- Only include auctions with buyout price
         if name == itemName and buyout and buyout > 0 then
             local unitPrice = buyout / count
+            local unitBid = (bid or buyout) / count
             
-            -- Grouping key: price + owner + stack size
+            -- Grouping key: price + bid + owner + stack size
             local ownerName = owner or "Unknown"
-            local key = string.format("%.4f_%s_%d", unitPrice, ownerName, count)
+            local key = string.format("%.4f_%.4f_%s_%d", unitPrice, unitBid, ownerName, count)
             
             if groupedMap[key] then
                 groupedMap[key].quantity = groupedMap[key].quantity + 1
@@ -522,8 +486,10 @@ function addon:ProcessPostScanResults(itemName)
                 local data = {
                     owner = ownerName,
                     unitPrice = unitPrice,
+                    unitBid = unitBid,
                     count = count,
                     buyout = buyout,
+                    bid = bid,
                     texture = texture,
                     link = itemLink,
                     quantity = 1
@@ -535,6 +501,7 @@ function addon:ProcessPostScanResults(itemName)
             if ownerName ~= UnitName("player") then
                 if not minBuyoutUnit or unitPrice < minBuyoutUnit then
                     minBuyoutUnit = unitPrice
+                    minBidUnit = unitBid
                 end
             end
         end
@@ -544,28 +511,27 @@ function addon:ProcessPostScanResults(itemName)
     table.sort(results, function(a, b) return a.unitPrice < b.unitPrice end)
     self.postPane.ahResults = results
     
-    if minBuyoutUnit then
-        -- Undercut by 1 copper (integer)
-        local suggestedBuyout = math.floor(minBuyoutUnit - 1)
-        if suggestedBuyout < 1 then suggestedBuyout = 1 end
-        
-        -- Bid: same undercut, but cap at 80% of buyout
-        local suggestedBid = suggestedBuyout 
-        local minBid = math.floor(suggestedBuyout * 0.95) -- Higher bid to discourage bidding
-        if suggestedBid < minBid then suggestedBid = minBid end
-        
-        self.postPane.suggestedBuyout = suggestedBuyout
-        self.postPane.suggestedBid = suggestedBid
-        self.postPane.selectedAHData = results[1] -- Highlight the cheapest automatically
-        
-        if self.postPane.priceLabel then
-            self.postPane.priceLabel:SetText(string.format("Bid: %s   Buyout: %s", self:FormatMoney(suggestedBid), self:FormatMoney(suggestedBuyout)))
+    -- Auto-select the cheapest non-player auction to undercut
+    local cheapestNonPlayer = nil
+    for _, data in ipairs(results) do
+        if data.owner ~= UnitName("player") then
+            cheapestNonPlayer = data
+            break
         end
+    end
+    
+    if cheapestNonPlayer then
+        self:SelectAHPrice(cheapestNonPlayer)
         self.postPane.scanStatus:SetText("Scan complete.")
+    elseif #results > 0 then
+        -- All auctions are ours, just select the first one as reference
+        self:SelectAHPrice(results[1])
+        self.postPane.scanStatus:SetText("Only your auctions found.")
     else
         self.postPane.scanStatus:SetText("No other auctions found.")
     end
     self:RefreshPostAHList()
+    self:UpdatePostButtonText()
     self.isPostScan = false
 end
 

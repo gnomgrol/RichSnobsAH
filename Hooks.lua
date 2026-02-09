@@ -45,7 +45,7 @@ function addon:SetupFrameHooks()
     -- Hook inventory item clicks
     hooksecurefunc("ContainerFrameItemButton_OnModifiedClick", function(self, button)
         if button == "LeftButton" and IsShiftKeyDown() then
-            if addon.mainAHPanel and addon.mainAHPanel:IsShown() and addon.db.selectedTab == 3 then
+            if addon.mainAHPanel and addon.mainAHPanel:IsShown() then
                 local bag, slot
                 if self:GetParent().GetID then
                     bag = self:GetParent():GetID()
@@ -56,11 +56,17 @@ function addon:SetupFrameHooks()
                 local itemLink = C_Container and C_Container.GetContainerItemLink(bag, slot) or GetContainerItemLink(bag, slot)
                 
                 if itemLink then
-                    local texture = select(10, GetItemInfo(itemLink))
-                    addon:ShowPostPane({
-                        link = itemLink,
-                        texture = texture
-                    })
+                    if addon.db.selectedTab == 1 then
+                        -- Buy tab: search for the item
+                        addon:SearchAH(itemLink, true)
+                    elseif addon.db.selectedTab == 3 then
+                        -- Post tab: select item for posting
+                        local texture = select(10, GetItemInfo(itemLink))
+                        addon:ShowPostPane({
+                            link = itemLink,
+                            texture = texture
+                        })
+                    end
                 end
             end
         end

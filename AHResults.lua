@@ -140,6 +140,7 @@ auctionEventFrame:SetScript("OnEvent", function(self, event, arg1, arg2)
 
         local pendingItem = addon.ahPendingItem
 
+        local shouldRemove = false
         -- ERR_AUCTION_NOT_FOUND is usually "The item was not found"
         if msg == ERR_AUCTION_NOT_FOUND or msg:find("not found") then
                 -- Check if we JUST bought it.
@@ -153,6 +154,7 @@ auctionEventFrame:SetScript("OnEvent", function(self, event, arg1, arg2)
                 
                 addon:ResetPurchaseState()
                 addon:UpdateStatusText("Item not found (Gone)")
+                shouldRemove = true
         elseif msg == ERR_AUCTION_DATABASE_ERROR or msg:find("Auction House") then
                 -- AH Database error or general AH error
                 addon:ResetPurchaseState()
@@ -165,15 +167,17 @@ auctionEventFrame:SetScript("OnEvent", function(self, event, arg1, arg2)
         
         addon.print("Purchase failed for " .. (pendingItem.name or "item") .. ": " .. msg)
         
-        -- Remove from list
-        for i, res in ipairs(addon.ahSearchResults or {}) do
-            if res == pendingItem then
-                table.remove(addon.ahSearchResults, i)
-                local nextItem = addon.ahSearchResults[i] or addon.ahSearchResults[i-1]
-                if nextItem then
-                    C_Timer.After(0.1, function() addon:SelectResult(nextItem) end)
+        -- Remove from list ONLY if it's truly gone
+        if shouldRemove then
+            for i, res in ipairs(addon.ahSearchResults or {}) do
+                if res == pendingItem then
+                    table.remove(addon.ahSearchResults, i)
+                    local nextItem = addon.ahSearchResults[i] or addon.ahSearchResults[i-1]
+                    if nextItem then
+                        C_Timer.After(0.1, function() addon:SelectResult(nextItem) end)
+                    end
+                    break
                 end
-                break
             end
         end
     end
@@ -249,6 +253,35 @@ function addon:CreateAHResultsPane(parentFrame)
     end)
     pane.searchEdit = searchEdit
 
+    -- Fast Scan Checkbox
+    local fastScanCB = CreateFrame("CheckButton", "RichSnobsAHFastScanCB", pane, "InterfaceOptionsCheckButtonTemplate")
+    fastScanCB:SetPoint("LEFT", searchEdit, "RIGHT", 10, 0)
+    fastScanCB:SetSize(24, 24)
+    _G[fastScanCB:GetName() .. "Text"]:SetText("Fast scan")
+    fastScanCB:SetScript("OnClick", function(self)
+        addon.db.fastScan = self:GetChecked()
+    end)
+    fastScanCB:SetScript("OnShow", function(self)
+        self:SetChecked(addon.db.fastScan)
+    end)
+    pane.fastScanCB = fastScanCB
+    
+    -- Search Button
+    local searchBtn = CreateFrame("Button", nil, pane, "GameMenuButtonTemplate")
+    searchBtn:SetSize(80, 22)
+    searchBtn:SetPoint("LEFT", fastScanCB, "RIGHT", 75, 0)
+    searchBtn:SetText("Search")
+    searchBtn:SetNormalFontObject("GameFontNormalSmall")
+    searchBtn:SetHighlightFontObject("GameFontHighlightSmall")
+    searchBtn:SetScript("OnClick", function()
+        local text = searchEdit:GetText()
+        if text and text ~= "" then
+            addon:SearchAH(text, false)
+            searchEdit:ClearFocus()
+        end
+    end)
+    pane.searchBtn = searchBtn
+
     -- Items bought indicator
     local itemsBought = pane:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     itemsBought:SetPoint("BOTTOMRIGHT", -15, 15)
@@ -323,7 +356,7 @@ function addon:CreateAHResultsPane(parentFrame)
         -- Stack Count (e.g. [10] for 10 stacks)
         local stackCount = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         stackCount:SetPoint("LEFT", icon, "RIGHT", 5, 0)
-        stackCount:SetWidth(20)
+        stackCount:SetWidth(32)
         stackCount:SetJustifyH("LEFT")
         stackCount:SetTextColor(0.7, 0.7, 0.7)
         row.stackCount = stackCount
@@ -375,7 +408,11 @@ function addon:CreateAHResultsPane(parentFrame)
         end)
         row:SetScript("OnClick", function(self)
             if self.data then
-                addon:SelectResult(self.data)
+                if IsShiftKeyDown() and addon.addItemActiveEditBox and addon.addItemActiveEditBox:IsVisible() then
+                    addon:AddItemFromLink(self.data.link)
+                else
+                    addon:SelectResult(self.data)
+                end
             end
         end)
         row:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -681,9 +718,9 @@ function addon:ProcessAHResults()
             local nextRetry = math.max(0, 5.5 - queryAge)
             
             if addon.ahResultsPane then
-                local reason = isStaleContent and "Stale Content" or "Stale Count"
-                addon.ahResultsPane.progress:SetText(string.format("Waiting for Page %d (%s)... %.1fs (Retry in %.1fs)", 
-                    addon.ahCurrentPage + 1, reason, addon.ahPageBufferWaitCount * 0.2, nextRetry))
+                local totalPagesDisp = addon.ahTotalPages > 0 and addon.ahTotalPages or "?"
+                addon.ahResultsPane.progress:SetText(string.format("Waiting for Page %d / %s...", 
+                    addon.ahCurrentPage + 1, totalPagesDisp))
             end
             
             -- Schedule a poll
@@ -693,8 +730,9 @@ function addon:ProcessAHResults()
                 end
             end)
             
-            -- Re-query ONLY after the internal 5s CD has passed + a small buffer
-            if queryAge > 5.5 and CanSendAuctionQuery() then
+            -- Re-query ONLY after the internal CD has passed + a small buffer
+            -- Reduced from 5.5 to 2.5 for more frequent retries as per user request
+            if queryAge > 2.5 and CanSendAuctionQuery() then
                 addon.ahLastQueryTime = GetTime()
                 addon.ahQueryCountForPage = (addon.ahQueryCountForPage or 1) + 1
                 local retryName = addon.ahCurrentSearchName or (addon.ahSelectedResult and addon.ahSelectedResult.name)
@@ -872,7 +910,8 @@ function addon:ProcessAHResults()
     -- (It is handled by the main auctionEventFrame script via AUCTION_ITEM_LIST_UPDATE)
 
     -- Auto-request next page if we haven't reached the end AND we are in scan mode
-    if addon.ahIsScanning and addon.ahCurrentPage < addon.ahTotalPages - 1 then
+    local isFastScan = addon.db.fastScan
+    if addon.ahIsScanning and addon.ahCurrentPage < addon.ahTotalPages - 1 and not isFastScan then
         addon.ahCurrentPage = addon.ahCurrentPage + 1
         addon.ahWaitingForPageUpdate = true
         addon.ahLastQueryTime = GetTime()
@@ -1291,9 +1330,9 @@ function addon:InitiateBuy(result)
         
         -- Start safety timeout for purchase
         if addon.purchaseTimeoutTimer then addon.purchaseTimeoutTimer:Cancel() end
-        addon.purchaseTimeoutTimer = C_Timer.After(7.0, function()
+        addon.purchaseTimeoutTimer = C_Timer.After(10, function()
             if addon.ahIsBuying then
-                addon.print("Purchase timed out after 7 seconds.")
+                addon.print("Purchase timed out after 10 seconds.")
                 addon:ResetPurchaseState()
                 addon:UpdateStatusText("Purchase Timeout")
             end

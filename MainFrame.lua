@@ -236,16 +236,91 @@ function addon:CreateMainFrame()
     -- Import Selection Button
     local importBtn = CreateFrame("Button", nil, frame, "GameMenuButtonTemplate")
     importBtn:SetPoint("BOTTOMLEFT", itemFrame, "BOTTOMLEFT", 0, -25)
-    importBtn:SetWidth(160)
+    importBtn:SetWidth(120)
     importBtn:SetHeight(20)
     importBtn:SetNormalFontObject("GameFontNormalSmall")
     importBtn:SetHighlightFontObject("GameFontHighlightSmall")
-    importBtn:SetText("Import Selected Recipe")
+    importBtn:SetText("Import Recipe")
     importBtn:SetScript("OnClick", function()
         addon:ImportSelection()
     end)
     frame.importBtn = importBtn
     addon.importBtn = importBtn -- keep reference for disabling
+
+    -- Add Item Button (for arbitrary non-craftable items)
+    local addItemBtn = CreateFrame("Button", nil, frame, "GameMenuButtonTemplate")
+    addItemBtn:SetPoint("LEFT", importBtn, "RIGHT", 5, 0)
+    addItemBtn:SetWidth(80)
+    addItemBtn:SetHeight(20)
+    addItemBtn:SetNormalFontObject("GameFontNormalSmall")
+    addItemBtn:SetHighlightFontObject("GameFontHighlightSmall")
+    addItemBtn:SetText("Add Item")
+
+    -- Helper: add an item link directly to the current group
+    function addon:AddItemFromLink(link)
+        if not link or not addon.db.selectedGroupIndex then return end
+        local itemLink = link:match("|c.-|Hitem:.-|h%[.-%]|h|r")
+        if not itemLink then return end
+        local itemName, _, _, _, _, _, _, _, _, itemTexture = GetItemInfo(itemLink)
+        addon:AddItemToGroup(addon.db.selectedGroupIndex, {
+            link = itemLink,
+            texture = itemTexture or "Interface\\Icons\\Inv_Misc_QuestionMark",
+            count = 1,
+            reagents = {},
+        })
+        -- Update the edit box to show what was added
+        if addon.addItemActiveEditBox then
+            addon.addItemActiveEditBox:SetText(itemLink)
+        end
+    end
+
+    -- Hook HandleModifiedItemClick ONCE to intercept Shift-clicks on bag items
+    hooksecurefunc("HandleModifiedItemClick", function(link)
+        if addon.addItemActiveEditBox and addon.addItemActiveEditBox:IsVisible() and link then
+            addon:AddItemFromLink(link)
+        end
+    end)
+
+    -- Hook ChatEdit_InsertLink for links clicked from chat messages
+    local orig_ChatEdit_InsertLink = ChatEdit_InsertLink
+    ChatEdit_InsertLink = function(link, ...)
+        if addon.addItemActiveEditBox and addon.addItemActiveEditBox:IsVisible() then
+            addon:AddItemFromLink(link)
+            return true
+        end
+        return orig_ChatEdit_InsertLink(link, ...)
+    end
+
+    addItemBtn:SetScript("OnClick", function()
+        if not addon.db.selectedGroupIndex then
+            addon.print("No group selected.")
+            return
+        end
+        StaticPopupDialogs["RICHSNOBSAH_ADD_ITEM"] = {
+            text = "Shift-click items to add them to the group.\nPress Escape or click Close when done.",
+            button1 = "Close",
+            hasEditBox = true,
+            timeout = 0,
+            whileDead = true,
+            hideOnEscape = true,
+            OnShow = function(self)
+                local editBox = _G[self:GetName() .. "EditBox"]
+                editBox:SetText("")
+                editBox:EnableKeyboard(false)
+                editBox:ClearFocus()
+                addon.addItemActiveEditBox = editBox
+            end,
+            OnHide = function(self)
+                addon.addItemActiveEditBox = nil
+            end,
+            OnAccept = function(self)
+                -- Close button just closes the dialog
+            end,
+        }
+        StaticPopup_Show("RICHSNOBSAH_ADD_ITEM")
+    end)
+    frame.addItemBtn = addItemBtn
+    addon.addItemBtn = addItemBtn
 
     -- Full Scan Button
     local fullScanBtn = CreateFrame("Button", nil, frame, "GameMenuButtonTemplate")
@@ -477,14 +552,21 @@ function addon:CreateMainFrame()
             if IsShiftKeyDown() then
                 if self.itemIndex and addon.db.selectedGroupIndex then
                     local item = addon.db.groups[addon.db.selectedGroupIndex].items[self.itemIndex]
-                    addon:SearchAH(item.link)
+                    if addon.addItemActiveEditBox and addon.addItemActiveEditBox:IsVisible() then
+                        -- Add Item dialog is open: add this item to the group
+                        addon:AddItemFromLink(item.link)
+                    else
+                        addon:SearchAH(item.link, true)
+                    end
                 end
             else
-                -- Toggle expand
+                -- Toggle expand (only for craftable items with reagents)
                 if self.itemIndex and addon.db.selectedGroupIndex then
                     local item = addon.db.groups[addon.db.selectedGroupIndex].items[self.itemIndex]
-                    item.expanded = not item.expanded
-                    addon:RefreshMainFrame() -- Full refresh to adjust layout size
+                    if item.reagents and #item.reagents > 0 then
+                        item.expanded = not item.expanded
+                        addon:RefreshMainFrame()
+                    end
                 end
             end
         end)
@@ -601,50 +683,77 @@ function addon:RefreshMainFrame()
                 local row = self.itemRows[rowIdx]
                 row.itemIndex = i
                 
-                -- Calculate and display craftable count
-                local craftCount = addon:GetMaxCraftable(item)
-                local craftText = ""
-                if craftCount > 0 then
-                    craftText = " |cff00ff00[x" .. craftCount .. "]|r"
-                else
-                    craftText = " |cffff0000[x0]|r"
-                end
+                local isCraftable = item.reagents and #item.reagents > 0
+                local countText = ""
+                
+                if isCraftable then
+                    -- Craftable item: show craftable count and profit
+                    local craftCount = addon:GetMaxCraftable(item)
+                    if craftCount > 0 then
+                        countText = " |cff00ff00[x" .. craftCount .. "]|r"
+                    else
+                        countText = " |cffff0000[x0]|r"
+                    end
 
-                -- Calculate Cost and Profit
-                local craftCost = addon:CalculateCraftCost(item)
-                local sellPrice = addon:GetItemPrice(item.recipeName)
-                if (not sellPrice or sellPrice == 0) and item.link then
-                    local itemName = GetItemInfo(item.link)
-                    if itemName then
-                        sellPrice = addon:GetItemPrice(itemName)
+                    local craftCost = addon:CalculateCraftCost(item)
+                    local sellPrice = addon:GetItemPrice(item.recipeName)
+                    if (not sellPrice or sellPrice == 0) and item.link then
+                        local itemName = GetItemInfo(item.link)
+                        if itemName then
+                            sellPrice = addon:GetItemPrice(itemName)
+                        end
+                    end
+                    if (not sellPrice or sellPrice == 0) and item.link then
+                        local rawName = item.link:match("%[(.-)%]")
+                        if rawName then
+                            sellPrice = addon:GetItemPrice(rawName)
+                        end
+                    end
+                    if (not sellPrice or sellPrice == 0) and item.link then
+                        sellPrice = addon:GetItemPrice(item.link)
+                    end
+
+                    local profit = (sellPrice or 0) - craftCost
+                    if craftCost > 0 and sellPrice > 0 then
+                        local color = (profit > 0) and "|cff00ff00" or "|cffff0000"
+                        row.profitText:SetText(color .. "P: " .. addon:FormatMoney(profit, true) .. "|r")
+                    elseif craftCost > 0 then
+                        row.profitText:SetText("|cffccccccC: " .. addon:FormatMoney(craftCost, true) .. "|r")
+                    else
+                        row.profitText:SetText("")
+                    end
+                else
+                    -- Non-craftable item: show bag count and AH price
+                    local bagCount = 0
+                    if item.link then
+                        bagCount = (C_Item and C_Item.GetItemCount(item.link, false)) or GetItemCount(item.link, false)
+                    end
+                    if bagCount > 0 then
+                        countText = " |cff00ff00[x" .. bagCount .. "]|r"
+                    else
+                        countText = " |cffff0000[x0]|r"
+                    end
+
+                    -- Show AH price
+                    local ahPrice = 0
+                    if item.link then
+                        local itemName = GetItemInfo(item.link)
+                        if itemName then
+                            ahPrice = addon:GetItemPrice(itemName)
+                        end
+                        if ahPrice == 0 then
+                            local rawName = item.link:match("%[(.-)%]")
+                            if rawName then ahPrice = addon:GetItemPrice(rawName) end
+                        end
+                    end
+                    if ahPrice > 0 then
+                        row.profitText:SetText("|cffffcc00" .. addon:FormatMoney(ahPrice, true) .. "|r")
+                    else
+                        row.profitText:SetText("")
                     end
                 end
-                
-                -- Fallback to item name from link if recipeName didn't work and GetItemInfo failed (uncached)
-                if (not sellPrice or sellPrice == 0) and item.link then
-                    local rawName = item.link:match("%[(.-)%]")
-                    if rawName then
-                        sellPrice = addon:GetItemPrice(rawName)
-                    end
-                end
-                
-                -- Final fallback: use the link itself as key (unlikely to work but safe)
-                if (not sellPrice or sellPrice == 0) and item.link then
-                    sellPrice = addon:GetItemPrice(item.link)
-                end
 
-                local profit = (sellPrice or 0) - craftCost
-                
-                if craftCost > 0 and sellPrice > 0 then
-                    local color = (profit > 0) and "|cff00ff00" or "|cffff0000"
-                    row.profitText:SetText(color .. "P: " .. addon:FormatMoney(profit, true) .. "|r")
-                elseif craftCost > 0 then
-                    row.profitText:SetText("|cffccccccC: " .. addon:FormatMoney(craftCost, true) .. "|r")
-                else
-                    row.profitText:SetText("")
-                end
-
-                row.name:SetText((item.link or "Unknown Item") .. craftText)
+                row.name:SetText((item.link or "Unknown Item") .. countText)
                 row.icon:SetTexture(item.texture or "Interface\\Icons\\Inv_Misc_QuestionMark")
 
                 -- Enable/Disable Post button based on AH state
@@ -699,7 +808,7 @@ function addon:RefreshMainFrame()
                            rBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
                            rBtn:SetScript("OnClick", function(self)
                                if self.link then
-                                   addon:SearchAH(self.link)
+                                   addon:SearchAH(self.link, true)
                                end
                            end)
                           

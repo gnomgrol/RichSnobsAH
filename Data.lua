@@ -119,18 +119,31 @@ function addon:FindCraftableItem(itemName)
     return nil
 end
 
-function addon:GetAllTrackedItemNames()
+function addon:GetAllTrackedItemNames(groupIndex)
     local names = {}
     if not self.db or not self.db.groups then return names end
     
-    for _, group in ipairs(self.db.groups) do
+    local groupsToScan = {}
+    if groupIndex and self.db.groups[groupIndex] then
+        table.insert(groupsToScan, self.db.groups[groupIndex])
+    else
+        groupsToScan = self.db.groups
+    end
+
+    for _, group in ipairs(groupsToScan) do
         for _, item in ipairs(group.items) do
-            -- Add the crafted item itself
-            local name = item.recipeName or (item.link and GetItemInfo(item.link))
-            if not name and item.link then
-                name = item.link:match("%[(.-)%]")
+            -- Add recipe name (if present)
+            if item.recipeName then
+                names[item.recipeName] = true
             end
-            if name then names[name] = true end
+            -- Add item name from link (may differ from recipeName)
+            if item.link then
+                local itemName = GetItemInfo(item.link)
+                if not itemName then
+                    itemName = item.link:match("%[(.-)%]")
+                end
+                if itemName then names[itemName] = true end
+            end
             
             -- Add all reagents
             if item.reagents then
@@ -146,4 +159,17 @@ function addon:GetAllTrackedItemNames()
         end
     end
     return names
+end
+
+function addon:GetBagItemCount(link)
+    if not link then return 0 end
+    local itemID = link:match("item:(%d+)")
+    if not itemID then return 0 end
+    
+    -- In TBC Anniversary/Classic, C_Item.GetItemCount is the preferred modern API
+    if C_Item and C_Item.GetItemCount then
+        return C_Item.GetItemCount(itemID, false)
+    end
+    -- Fallback to global GetItemCount
+    return GetItemCount(itemID)
 end
