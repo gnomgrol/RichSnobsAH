@@ -483,6 +483,9 @@ end
 
 -- Search AH for an item
 function addon:SearchAH(link, isExact)
+    -- Switch to the Buy tab to show results
+    self:SelectAHPanelTab(1)
+    
     if not link then return end
     if isExact == nil then isExact = true end
 
