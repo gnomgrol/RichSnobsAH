@@ -103,6 +103,18 @@ function addon:CreateUndercutPane(parentFrame)
     end)
     pane.scanBtn = scanBtn
 
+    -- Total Incoming Gold text
+    local soldTotalText = pane:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    soldTotalText:SetPoint("BOTTOMRIGHT", -20, 15)
+    soldTotalText:SetText("")
+    pane.soldTotalText = soldTotalText
+
+    -- Total Active Gold text (buyout values)
+    local activeTotalText = pane:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    activeTotalText:SetPoint("BOTTOMLEFT", 20, 15)
+    activeTotalText:SetText("")
+    pane.activeTotalText = activeTotalText
+
     addon.undercutPane = pane
 end
 
@@ -197,6 +209,20 @@ function addon:RefreshUndercutPane()
             row:Hide()
         end
     end
+
+    -- Calculate and update totals
+    local totalSold = 0
+    local totalActive = 0
+    for _, res in ipairs(results) do
+        if res.isSold then
+            totalSold = totalSold + (res.payoff or 0)
+        else
+            totalActive = totalActive + ((res.buyout or 0) * (res.numStacked or 1))
+        end
+    end
+
+    pane.soldTotalText:SetText("Inc: " .. self:FormatMoney(totalSold, true))
+    pane.activeTotalText:SetText("Total: " .. self:FormatMoney(totalActive, true))
 end
 
 
@@ -575,6 +601,28 @@ function addon:CancelUndercutAuction(auction)
     local targetIndex = FindTargetIndex()
     
     if targetIndex then
+        local function ResolveCancellation(success)
+            if self.cancelTimeout then self.cancelTimeout:Cancel() self.cancelTimeout = nil end
+            if self.cancellationListener then self.cancellationListener:UnregisterAllEvents() end
+            addon.isCancelling = false
+            auction.cancellingThis = false
+            
+            if success then
+                -- Proactively update counts for snappiness
+                if auction.numStacked and auction.numStacked > 1 then
+                    auction.numStacked = auction.numStacked - 1
+                else
+                    for i, res in ipairs(self.undercutResults) do
+                        if res == auction then
+                            table.remove(self.undercutResults, i)
+                            break
+                        end
+                    end
+                end
+            end
+            addon:RefreshUndercutPane()
+        end
+
         -- CRITICAL: Call CancelAuction BEFORE updating any UI to avoid execution path taint
         CancelAuction(targetIndex)
 
@@ -589,21 +637,24 @@ function addon:CancelUndercutAuction(auction)
         local listener = self.cancellationListener
         listener:UnregisterAllEvents()
         listener:RegisterEvent("AUCTION_OWNED_LIST_UPDATE")
+        listener:RegisterEvent("CHAT_MSG_SYSTEM")
         
         if self.cancelTimeout then self.cancelTimeout:Cancel() end
         self.cancelTimeout = C_Timer.After(4.0, function()
-             listener:UnregisterAllEvents()
-             addon.isCancelling = false
-             auction.cancellingThis = false
-             addon:RefreshUndercutPane()
+             ResolveCancellation(false)
         end)
         
-        listener:SetScript("OnEvent", function(frame, event)
-            frame:UnregisterAllEvents()
-            if self.cancelTimeout then self.cancelTimeout:Cancel() self.cancelTimeout = nil end
-            
-            addon.isCancelling = false
-            auction.cancellingThis = false
+        listener:SetScript("OnEvent", function(frame, event, msg)
+            if event == "CHAT_MSG_SYSTEM" then
+                -- ERR_AUCTION_REMOVED is "Auction removed."
+                if msg == ERR_AUCTION_REMOVED or msg:find("Auction removed") then
+                    ResolveCancellation(true)
+                end
+                return
+            end
+
+            -- AUCTION_OWNED_LIST_UPDATE
+            ResolveCancellation(false)
             
             -- Re-fetch auctions from the server to get precise updated counts and indices
             -- Preserve current scan results so the user doesn't lose the "Undercut" status info

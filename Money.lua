@@ -19,8 +19,11 @@ function addon:FormatMoney(copper, hideCopperIfGold)
         str = str .. "|cffc7c7cf" .. string.format("%02d", silver) .. "s|r "
     end
     
-    if gold > 0 or silver > 0 or copperRem > 0 or (not hideCopperIfGold) then
-        str = str .. "|cffeda55f" .. string.format("%02d", copperRem) .. "c|r"
+    -- New logic: Skip copper if hideCopperIfGold is true and we have gold
+    if not (hideCopperIfGold and gold > 0) then
+        if gold > 0 or silver > 0 or copperRem > 0 or (not hideCopperIfGold) then
+            str = str .. "|cffeda55f" .. string.format("%02d", copperRem) .. "c|r"
+        end
     end
     
     -- Trim trailing space if any

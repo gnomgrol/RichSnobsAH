@@ -235,7 +235,36 @@ function addon:CreatePostPane(parentFrame)
     sellDrop:SetScript("OnReceiveDrag", HandleItemDrop)
     sellDrop:SetScript("OnClick", HandleItemDrop)
 
+    -- Event listener for combat end to apply pending button states
+    local combatFrame = CreateFrame("Frame")
+    combatFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
+    combatFrame:SetScript("OnEvent", function()
+        if pane.postBtn and pane.postBtn.pendingEnabledState ~= nil then
+            if pane.postBtn.pendingEnabledState then
+                pane.postBtn:Enable()
+            else
+                pane.postBtn:Disable()
+            end
+            pane.postBtn.pendingEnabledState = nil
+        end
+    end)
+    pane.combatFrame = combatFrame
+
     addon.postPane = pane
+end
+
+function addon:SafeSetBtnEnabled(button, enabled)
+    if not button then return end
+    if InCombatLockdown() then
+        button.pendingEnabledState = enabled
+    else
+        if enabled then
+            button:Enable()
+        else
+            button:Disable()
+        end
+        button.pendingEnabledState = nil
+    end
 end
 
 
@@ -317,15 +346,15 @@ function addon:UpdatePostButtonText()
     if self.postPane.postBtn then
         self.postPane.postBtn:SetText(string.format("Post Auction (%d left)", numStacks))
         if numStacks <= 0 then
-            self.postPane.postBtn:Disable()
+            self:SafeSetBtnEnabled(self.postPane.postBtn, false)
         else
             -- Only enable if we actually have enough items for at least one stack in BAGS
             local totalCount = self:GetBagItemCount(self.postPane.selectedItem.link)
 
             if totalCount >= stackSize then
-                self.postPane.postBtn:Enable()
+                self:SafeSetBtnEnabled(self.postPane.postBtn, true)
             else
-                self.postPane.postBtn:Disable()
+                self:SafeSetBtnEnabled(self.postPane.postBtn, false)
             end
         end
     end
@@ -379,7 +408,7 @@ function addon:SelectAHPrice(data)
     
     -- Re-enable post button if it was disabled from a failed/incomplete attempt
     if self.postPane.postBtn then
-        self.postPane.postBtn:Enable()
+        self:SafeSetBtnEnabled(self.postPane.postBtn, true)
     end
 
     -- Use this unit price as the base for undercutting
@@ -589,13 +618,13 @@ function addon:ExecutePostPreparation()
 
     if not bag then
         addon.print("Item not found in bags.")
-        if pane.postBtn then pane.postBtn:Enable() end
+        if pane.postBtn then self:SafeSetBtnEnabled(pane.postBtn, true) end
         return
     end
 
     -- Disable button now that we are sure we can post
     if pane.postBtn then
-        pane.postBtn:Disable()
+        self:SafeSetBtnEnabled(pane.postBtn, false)
     end
 
     -- Place item in slot

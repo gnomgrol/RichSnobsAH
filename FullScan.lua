@@ -24,7 +24,7 @@ function addon:StartFullScan()
     -- Disable UI
     if addon.fullScanBtn then addon.fullScanBtn:Disable() end
     if addon.undercutBtn then addon.undercutBtn:Disable() end
-    if addon.postBtn then addon.postBtn:Disable() end
+    if addon.postPane and addon.postPane.postBtn then addon:SafeSetBtnEnabled(addon.postPane.postBtn, false) end
     if addon.importBtn then addon.importBtn:Disable() end
     if addon.addItemBtn then addon.addItemBtn:Disable() end
 
@@ -133,7 +133,7 @@ end
 function addon:EndFullScan()
     if addon.fullScanBtn then addon.fullScanBtn:Enable() end
     if addon.undercutBtn then addon.undercutBtn:Enable() end
-    if addon.postBtn then addon.postBtn:Enable() end
+    if addon.postPane and addon.postPane.postBtn then addon:SafeSetBtnEnabled(addon.postPane.postBtn, true) end
     if addon.importBtn then addon.importBtn:Enable() end
     if addon.addItemBtn then addon.addItemBtn:Enable() end
 end

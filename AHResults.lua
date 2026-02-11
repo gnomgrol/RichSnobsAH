@@ -132,7 +132,7 @@ auctionEventFrame:SetScript("OnEvent", function(self, event, arg1, arg2)
 
         -- Handle Post Failure
         if addon.postPane and addon.postPane.postBtn then
-            addon.postPane.postBtn:Enable()
+            addon:SafeSetBtnEnabled(addon.postPane.postBtn, true)
         end
 
         -- Handle common auction errors (throttling, not found, etc)
