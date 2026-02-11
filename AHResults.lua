@@ -481,6 +481,24 @@ function addon:StopNormalScan()
     addon.isUndercutScan = false
 end
 
+-- Helper: Ensure AH is sorted by buyout unit price (lowest first)
+function addon:SetAHBuyoutSort()
+    -- Classic Era/Anniversary API for sorting: SortAuctionSetSort(case, "column", reverse)
+    -- Some modern Classic clients support "unitprice" or "buyout".
+    -- We'll try them defensively.
+    if SortAuctionSetSort then
+        -- Try "unitprice" (per-item buyout) first
+        local success = pcall(SortAuctionSetSort, "list", "unitprice", false)
+        if not success then
+            -- Fallback to "buyout" (total buyout)
+            pcall(SortAuctionSetSort, "list", "buyout", false)
+        end
+    elseif SortAuctionItems then
+        -- Legacy API fallback
+        pcall(SortAuctionItems, "list", "buyout")
+    end
+end
+
 -- Search AH for an item
 function addon:SearchAH(link, isExact)
     -- Switch to the Buy tab to show results
@@ -612,6 +630,10 @@ function addon:SearchAH(link, isExact)
     addon.ahWaitingForPageUpdate = true
     addon.ahLastQueryTime = GetTime()
     addon.ahQueryCountForPage = 1
+    
+    -- Ensure sorting is correct before querying
+    addon:SetAHBuyoutSort()
+    
     QueryAuctionItems(name, nil, nil, 0, nil, nil, false, isExact)
     
     -- Collapse AH
@@ -651,6 +673,7 @@ function addon:ProcessAHResults()
             end
             C_Timer.After(1.0, function()
                 if addon.ahCurrentSearchName then
+                    addon:SetAHBuyoutSort()
                     QueryAuctionItems(addon.ahCurrentSearchName, nil, nil, addon.ahCurrentPage, nil, nil, false, addon.ahCurrentSearchIsExact)
                 end
             end)
@@ -740,6 +763,7 @@ function addon:ProcessAHResults()
                 addon.ahQueryCountForPage = (addon.ahQueryCountForPage or 1) + 1
                 local retryName = addon.ahCurrentSearchName or (addon.ahSelectedResult and addon.ahSelectedResult.name)
                 if retryName then
+                    addon:SetAHBuyoutSort()
                     QueryAuctionItems(retryName, nil, nil, addon.ahCurrentPage, nil, nil, false, addon.ahCurrentSearchIsExact)
                 end
             end
@@ -874,6 +898,14 @@ function addon:ProcessAHResults()
         if a.unitPrice ~= b.unitPrice then
             return a.unitPrice < b.unitPrice
         end
+        
+        -- Tie-breaker: unit bid price
+        local aUnitBid = (a.minBid or a.buyout) / (a.count or 1)
+        local bUnitBid = (b.minBid or b.buyout) / (b.count or 1)
+        if aUnitBid ~= bUnitBid then
+            return aUnitBid < bUnitBid
+        end
+        
         return a.count > b.count
     end)
     
@@ -926,6 +958,7 @@ function addon:ProcessAHResults()
         -- Add a small delay to avoid overwhelming the server
         C_Timer.After(0.1, function()
             if addon.ahCurrentSearchName and not addon.ahIsBuying then
+                addon:SetAHBuyoutSort()
                 QueryAuctionItems(addon.ahCurrentSearchName, nil, nil, addon.ahCurrentPage, nil, nil, false, addon.ahCurrentSearchIsExact)
             end
         end)
@@ -1071,6 +1104,10 @@ function addon:CheckForPendingPurchase()
                 addon:UpdateStatusText("Redirection to page 1...")
                 addon.ahLastPageChangeTime = GetTime()
                 local isExact = (addon.ahCurrentSearchIsExact ~= nil) and addon.ahCurrentSearchIsExact or true
+                
+                -- Ensure sorting is correct before querying page 0 fallback
+                addon:SetAHBuyoutSort()
+                
                 QueryAuctionItems(addon.ahCurrentSearchName or addon.ahPendingItem.name, nil, nil, 0, nil, nil, false, isExact)
             else
                 -- Not found and we've already checked Page 1 or it moved beyond our fallback
@@ -1291,6 +1328,7 @@ function addon:VerifySelectedItem()
         addon.ahCurrentPage = targetPage
         addon.ahLastPageChangeTime = GetTime()
         
+        addon:SetAHBuyoutSort()
         QueryAuctionItems(currentSearchName, nil, nil, targetPage, nil, nil, false, isExact)
     else
         -- We are on the correct page.
@@ -1312,6 +1350,7 @@ function addon:VerifySelectedItem()
                  addon.ahResultsPane.progress:SetText(msg)
              end
              PrepareNavigationQuery()
+             addon:SetAHBuyoutSort()
              QueryAuctionItems(currentSearchName, nil, nil, targetPage, nil, nil, false, isExact)
         end
     end

@@ -78,7 +78,7 @@ function addon:CreateMainFrame()
     -- Title
     local title = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     title:SetPoint("TOP", 0, -15)
-    title:SetText("Rich Snobs (AH Crafting)")
+    title:SetText("Item Lists")
     frame.title = title
 
     -- AH Status Icon (Small gold coin in top left)
@@ -324,7 +324,7 @@ function addon:CreateMainFrame()
     -- ITEMS PANE (Right Side)
     local itemFrame = CreateFrame("Frame", nil, frame, "BackdropTemplate")
     itemFrame:SetPoint("TOPLEFT", groupFrame, "TOPRIGHT", 10, 0)
-    itemFrame:SetPoint("BOTTOMRIGHT", -40, 40) -- Space for scrollbar
+    itemFrame:SetPoint("BOTTOMRIGHT", -10, 40) -- Space for scrollbar
     
     itemFrame:SetBackdrop({
         bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
@@ -398,28 +398,7 @@ function addon:CreateMainFrame()
             addon.print("No group selected.")
             return
         end
-        StaticPopupDialogs["RICHSNOBSAH_ADD_ITEM"] = {
-            text = "Shift-click items to add them to the group.\nPress Escape or click Close when done.",
-            button1 = "Close",
-            hasEditBox = true,
-            timeout = 0,
-            whileDead = true,
-            hideOnEscape = true,
-            OnShow = function(self)
-                local editBox = _G[self:GetName() .. "EditBox"]
-                editBox:SetText("")
-                editBox:EnableKeyboard(false)
-                editBox:ClearFocus()
-                addon.addItemActiveEditBox = editBox
-            end,
-            OnHide = function(self)
-                addon.addItemActiveEditBox = nil
-            end,
-            OnAccept = function(self)
-                -- Close button just closes the dialog
-            end,
-        }
-        StaticPopup_Show("RICHSNOBSAH_ADD_ITEM")
+        addon:ToggleAddItemPopout()
     end)
     frame.addItemBtn = addItemBtn
     addon.addItemBtn = addItemBtn
@@ -824,6 +803,8 @@ function addon:RefreshMainFrame()
         totalHeight = totalHeight + h + 2 -- +2 for the spacing between rows
     end
 
+    self.lastItemTotalHeight = totalHeight
+
     -- FauxScrollFrame_Update(frame, numItems, displayableItems, itemHeight)
     -- We'll use totalHeight as numItems and 1 as itemHeight to simulate pixel-perfect scrolling
     FauxScrollFrame_Update(self.itemScroll, totalHeight, MAX_VIEWPORT_HEIGHT, 1) 
@@ -1049,4 +1030,11 @@ function addon:RefreshMainFrame()
     for i = rowIdx, MAX_ITEMS_DISPLAY do
         self.itemRows[i]:Hide()
     end
+end
+
+function addon:ScrollItemListToBottom()
+    if not self.itemScroll or not self.lastItemTotalHeight then return end
+    local maxOffset = math.max(0, self.lastItemTotalHeight - 320) -- 320 is MAX_VIEWPORT_HEIGHT
+    FauxScrollFrame_SetOffset(self.itemScroll, maxOffset)
+    self:RefreshMainFrame()
 end

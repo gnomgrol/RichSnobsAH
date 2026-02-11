@@ -346,18 +346,18 @@ function addon:FetchPlayerAuctions(preserveScanResults)
 end
 
 function addon:ScanNextUndercut()
+    if not self.isUndercutScan then return end
+
     if not self.undercutPane or not self.undercutPane:IsShown() then 
-        self.isUndercutScan = false
         addon:EndUndercutScan()
         return 
     end
 
-    -- Guard: Prevent starting a new search if one is already active or throttled
+    -- Guard: Prevent starting a new search if one is already active
     if self.isSearchingForUndercut then return end
 
     if self.undercutScanIndex > #self.itemsToScan then
         self.undercutPane.status:SetText("Undercut scan finished.")
-        self.isUndercutScan = false
         addon:EndUndercutScan()
         return
     end
@@ -376,28 +376,39 @@ function addon:ScanNextUndercut()
         self:RefreshUndercutPane()
     end
     
-    -- Reset retry count for new item
+    -- Reset retry count and load start time for new item
     self.undercutRetryCount = 0
+    self.undercutPageLoadStartTime = nil
+
     -- Perform AH search for this item
     self:SearchForUndercut(itemName)
-    self.undercutScanIndex = self.undercutScanIndex + 1
 end
 
 function addon:SearchForUndercut(itemName)
     -- Lock search
     self.isSearchingForUndercut = true
 
+    local function FinishSearch()
+        if not self.isSearchingForUndercut then return end -- Already cleaned up
+        self.isSearchingForUndercut = false
+        
+        if self.isUndercutScan then
+            self.undercutScanIndex = self.undercutScanIndex + 1
+            C_Timer.After(0.2, function() 
+                addon:ScanNextUndercut() 
+            end)
+        end
+    end
+
     local canQuery = CanSendAuctionQuery()
     if not canQuery then
         if self.undercutPane then
-            self.undercutPane.status:SetText(string.format("|cffff0000Throttled (Wait)|r - Scanning %s", itemName))
-            -- Ensure rows also show Scanning... state even while waiting for AH
+            self.undercutPane.status:SetText(string.format("|cffff0000Throttled (Wait)|r - Scanning (%d/%d): %s", self.undercutScanIndex, #self.itemsToScan, itemName))
             addon:RefreshUndercutPane()
         end
         C_Timer.After(1.0, function() 
             if self.isUndercutScan then
-                -- Reset lock briefly to allow re-entry
-                self.isSearchingForUndercut = false
+                self.isSearchingForUndercut = false -- Briefly unlock to allow re-entry validation in SearchForUndercut
                 addon:SearchForUndercut(itemName) 
             end
         end)
@@ -411,12 +422,15 @@ function addon:SearchForUndercut(itemName)
     local scanFrame = self.undercutScanFrame
     scanFrame:UnregisterAllEvents()
     scanFrame:RegisterEvent("AUCTION_ITEM_LIST_UPDATE")
+    scanFrame.isProcessing = false
     
     if self.undercutTimeout then
         self.undercutTimeout:Cancel()
     end
 
     self.undercutTimeout = C_Timer.After(5, function()
+        if scanFrame.isProcessing then return end
+        scanFrame.isProcessing = true
         scanFrame:UnregisterAllEvents()
         
         -- Update all auctions for this item
@@ -427,21 +441,19 @@ function addon:SearchForUndercut(itemName)
             end
         end
         
-        self.isSearchingForUndercut = false
-        addon:ScanNextUndercut()
+        FinishSearch()
     end)
 
     scanFrame:SetScript("OnEvent", function(frame, event)
+        if frame.isProcessing then return end
+
         local batchCount, totalCount = GetNumAuctionItems("list")
         
         if totalCount == 0 and batchCount == 0 then
-            -- In Classic, 0/0 can mean loading or actually empty.
-            -- We retry a few times before giving up.
-            self.undercutRetryCount = (self.undercutRetryCount or 0) + 1
+            self.undercutRetryCount = (self.retryCount or 0) + 1
             if self.undercutRetryCount < 3 then
-                return -- Wait for next event or timeout
+                return 
             end
-            -- If we retried enough and still 0/0, assume it's actually empty
         end
         
         if self.undercutTimeout then
@@ -451,10 +463,10 @@ function addon:SearchForUndercut(itemName)
 
         local expectedBatch = math.min(50, totalCount)
         if batchCount < expectedBatch then
-            return -- Still loading this page
+            return 
         end
 
-        -- Validation: Wait for all data on the current page to be ready (owner names, etc)
+        -- Validation: Wait for all data
         local unknownCount = 0
         for i = 1, batchCount do
             local name, _, _, _, _, _, _, _, _, _, _, _, _, owner, _, _, _, hasAllInfo = GetAuctionItemInfo("list", i)
@@ -471,19 +483,15 @@ function addon:SearchForUndercut(itemName)
                 if self.undercutPane then
                     self.undercutPane.status:SetText(string.format("Loading %s... (%d unknowns)", itemName, unknownCount))
                 end
-                -- We don't unregister yet, just return and wait for next event/timer
                 return
             end
-            -- Timeout: process anyway but maybe it's partially logged
         end
-        self.undercutPageLoadStartTime = nil -- Reset
+        self.undercutPageLoadStartTime = nil
 
+        frame.isProcessing = true
         scanFrame:UnregisterAllEvents()
         
         C_Timer.After(0.1, function()
-            -- We process results even if isUndercutScan was just cleared by a finish event
-            -- to ensure the last item's data is recorded.
-
             -- Analyze results
             local minBuyoutUnit = nil
             local ahAuctions = {}
@@ -491,13 +499,13 @@ function addon:SearchForUndercut(itemName)
                 local name, texture, count, q, cu, l, lch, mb, mi, buyout, ba, hb, hbf, owner = GetAuctionItemInfo("list", i)
                 if name == itemName and buyout and buyout > 0 then
                     local unitPrice = buyout / count
-                    local isMine = (owner == UnitName("player")) or (owner == "Unknown") -- In classic, if owner is nil it MIGHT be ours or just loading
+                    local isMine = (owner == UnitName("player")) or (owner == "Unknown")
                     
                     if not isMine then
                         if not minBuyoutUnit or unitPrice < minBuyoutUnit then
                             minBuyoutUnit = unitPrice
                         end
-                        table.insert(ahAuctions, { unitPrice = unitPrice })
+                        table.insert(ahAuctions, { unitPrice = unitPrice, unitBid = (ba or buyout) / count })
                     end
                 end
             end
@@ -512,7 +520,18 @@ function addon:SearchForUndercut(itemName)
                     local playerUnitPrice = auction.buyout / auction.count
                     local undercutCount = 0
                     for _, ahAuction in ipairs(ahAuctions) do
+                        local isUndercut = false
                         if ahAuction.unitPrice < playerUnitPrice - 0.0001 then
+                            isUndercut = true
+                        elseif math.abs(ahAuction.unitPrice - playerUnitPrice) < 0.0001 then
+                            -- Tie-breaker: unit bid
+                            local playerUnitBid = (auction.minBid or auction.buyout) / auction.count
+                            if ahAuction.unitBid < playerUnitBid - 0.0001 then
+                                isUndercut = true
+                            end
+                        end
+
+                        if isUndercut then
                             undercutCount = undercutCount + 1
                         end
                     end
@@ -529,13 +548,13 @@ function addon:SearchForUndercut(itemName)
             end
             
             addon:RefreshUndercutPane()
-            C_Timer.After(0.2, function() 
-                self.isSearchingForUndercut = false
-                addon:ScanNextUndercut() 
-            end)
+            FinishSearch()
         end)
     end)
 
+    -- Ensure sorting is correct before querying
+    addon:SetAHBuyoutSort()
+    
     QueryAuctionItems(itemName, nil, nil, 0, nil, nil, false, true)
 end
 

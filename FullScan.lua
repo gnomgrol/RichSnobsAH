@@ -121,6 +121,9 @@ function addon:StartFullScan()
             C_Timer.After(0.2, ScanNext)
         end)
 
+        -- Ensure sorting is correct before querying
+        addon:SetAHBuyoutSort()
+        
         QueryAuctionItems(itemName, nil, nil, 0, nil, nil, false, true)
     end
 

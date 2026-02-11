@@ -10,6 +10,7 @@ Money.lua
 AHResults.lua
 PostPane.lua
 UndercutPane.lua
+AddItemPane.lua
 MainAHPanel.lua
 FullScan.lua
 Hooks.lua

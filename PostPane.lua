@@ -457,6 +457,9 @@ function addon:ScanForItemPrice(itemName)
         end)
     end)
 
+    -- Ensure sorting is correct before querying
+    addon:SetAHBuyoutSort()
+    
     QueryAuctionItems(itemName, nil, nil, 0, nil, nil, false, true)
 end
 
@@ -508,7 +511,12 @@ function addon:ProcessPostScanResults(itemName)
     end
     
     -- Sort results by unit price
-    table.sort(results, function(a, b) return a.unitPrice < b.unitPrice end)
+    table.sort(results, function(a, b)
+        if a.unitPrice ~= b.unitPrice then
+            return a.unitPrice < b.unitPrice
+        end
+        return a.unitBid < b.unitBid
+    end)
     self.postPane.ahResults = results
     
     -- Auto-select the cheapest non-player auction to undercut

@@ -83,6 +83,7 @@ function addon:AddItemToGroup(groupIndex, itemData)
     table.insert(group.items, itemData)
     addon.print("Added " .. (itemData.link or "item") .. " to group " .. group.name)
     addon:RefreshMainFrame()
+    addon:ScrollItemListToBottom()
 end
 
 function addon:DeleteItem(groupIndex, itemIndex)
