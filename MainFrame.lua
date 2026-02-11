@@ -174,6 +174,11 @@ function addon:CreateMainFrame()
             timeout = 0,
             whileDead = true,
             hideOnEscape = true,
+            OnShow = function(self)
+                local editBox = _G[self:GetName() .. "EditBox"]
+                editBox:EnableKeyboard(true)
+                editBox:SetFocus()
+            end,
             OnAccept = function(self)
                 local editBox = _G[self:GetName() .. "EditBox"]
                 local text = editBox:GetText()
@@ -182,6 +187,9 @@ function addon:CreateMainFrame()
             EditBoxOnEnterPressed = function(self)
                 local text = self:GetText()
                 addon:AddGroup(text)
+                self:GetParent():Hide()
+            end,
+            EditBoxOnEscapePressed = function(self)
                 self:GetParent():Hide()
             end
         }

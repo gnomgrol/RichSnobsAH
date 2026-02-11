@@ -23,7 +23,7 @@ function addon:CreateUndercutPane(parentFrame)
     -- Results container
     local resultsFrame = CreateFrame("Frame", nil, pane, "BackdropTemplate")
     resultsFrame:SetPoint("TOPLEFT", 15, -30)
-    resultsFrame:SetPoint("BOTTOMRIGHT", -15, 45)
+    resultsFrame:SetPoint("BOTTOMRIGHT", -15, 35)
     resultsFrame:SetBackdrop({
         bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
         edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
@@ -93,7 +93,25 @@ function addon:CreateUndercutPane(parentFrame)
         pane.rows[i] = row
     end
 
+    -- Scan Button at the bottom
+    local scanBtn = CreateFrame("Button", nil, pane, "GameMenuButtonTemplate")
+    scanBtn:SetSize(160, 25)
+    scanBtn:SetPoint("BOTTOM", 0, 10)
+    scanBtn:SetText("Scan Undercuts")
+    scanBtn:SetScript("OnClick", function()
+        addon:StartUndercutScan()
+    end)
+    pane.scanBtn = scanBtn
+
     addon.undercutPane = pane
+end
+
+-- Helper: Format seconds into MM:SS
+function addon:FormatTime(seconds)
+    if not seconds or seconds <= 0 then return "00:00" end
+    local minutes = math.floor(seconds / 60)
+    local secs = seconds % 60
+    return string.format("%02d:%02d", minutes, secs)
 end
 
 -- Refresh Undercut Pane
@@ -102,6 +120,26 @@ function addon:RefreshUndercutPane()
     local results = self.undercutResults or {}
     local pane = self.undercutPane
     
+    -- Update timeLeft for sold auctions before sorting to ensure stable sort results
+    for _, res in ipairs(results) do
+        if res.isSold then
+            res.timeLeft = GetAuctionItemTimeLeft("owner", res.ownerIndex)
+        end
+    end
+
+    -- Sort results: Active (with undercut status) first, then sold auctions at the bottom
+    -- Sold auctions are sorted by timeLeft (soonest arriving first)
+    table.sort(results, function(a, b)
+        if a.isSold ~= b.isSold then
+            return not a.isSold
+        end
+        if a.isSold then
+            return (a.timeLeft or 0) < (b.timeLeft or 0)
+        end
+        -- Secondary sort within groups: by name
+        return a.name < b.name
+    end)
+
     FauxScrollFrame_Update(pane.scroll, #results, 10, 30)
     local offset = FauxScrollFrame_GetOffset(pane.scroll)
     
@@ -111,17 +149,27 @@ function addon:RefreshUndercutPane()
         if index <= #results then
             local auction = results[index]
             row.icon:SetTexture(auction.texture or "Interface\\Icons\\Inv_Misc_QuestionMark")
-            row.name:SetText(auction.name .. " x" .. auction.count)
+            local nameText = (auction.link or auction.name) .. (auction.count > 1 and (" x" .. auction.count) or "")
+            if auction.numStacked and auction.numStacked > 1 then
+                nameText = nameText .. " |cffaaaaaa(" .. auction.numStacked .. ")|r"
+            end
+            row.name:SetText(nameText)
             
-            if auction.scanning or addon.isCancelling then
+            if auction.isSold then
+                row.statusText:SetText("|cff00ff00Sold!|r " .. self:FormatMoney(auction.payoff) .. "\n|cffaaaaaa" .. self:FormatTime(auction.timeLeft) .. "|r")
+                row.cancelBtn:Disable()
+            elseif auction.scanning or (addon.isCancelling and auction.cancellingThis) then
                 row.statusText:SetText(auction.scanning and "|cffffff00Scanning...|r" or "|cffffff00Cancelling...|r")
+                row.cancelBtn:Disable()
+            elseif addon.isCancelling then
+                row.statusText:SetText("|cffaaaaaaQueued...|r")
                 row.cancelBtn:Disable()
             elseif not auction.scanned then
                 -- Only show "Queued" if we are actually in a scan session
                 if addon.isUndercutScan then
                     row.statusText:SetText("|cffaaaaaaQueued...|r")
                 else
-                    row.statusText:SetText("|cffaaaaaaSkipped|r")
+                    row.statusText:SetText("|cffaaaaaa" .. self:FormatMoney(auction.buyout) .. "|r")
                 end
                 row.cancelBtn:Enable()
             elseif auction.error then
@@ -157,6 +205,14 @@ function addon:StartUndercutScan()
 
     if self.isUndercutScan then return end
 
+    -- Fetch latest first to ensure we have a fresh list of active auctions
+    self:FetchPlayerAuctions()
+
+    if not self.undercutResults or #self.undercutResults == 0 then
+         -- FetchPlayerAuctions already updates status
+         return
+    end
+
     -- Disable UI to prevent concurrent scans
     if self.undercutPane and self.undercutPane.scanBtn then
         self.undercutPane.scanBtn:Disable()
@@ -165,48 +221,15 @@ function addon:StartUndercutScan()
     if addon.importBtn then addon.importBtn:Disable() end
 
     self.isUndercutScan = true
-    -- Hide other panes
-    -- if addon.ahResultsPane then addon.ahResultsPane:Hide() end
-    -- if addon.postPane then addon.postPane:Hide() end
+    self.undercutPane.status:SetText("Scanning undercuts...")
     
-    -- self.undercutPane:Show()
-    self.undercutPane.status:SetText("Fetching your auctions...")
-    self.undercutResults = {}
-    self:RefreshUndercutPane()
-    
-    -- 1. Scan player's auctions
-    local numOwnerAuctions = GetNumAuctionItems("owner")
-    if numOwnerAuctions == 0 then
-        self.undercutPane.status:SetText("No active auctions found.")
-        addon:EndUndercutScan()
-        return
-    end
-
     local itemsToScanMap = {}
-    for i = 1, numOwnerAuctions do
-        local name, texture, count, quality, canUse, level, levelColHeader, minBid, minIncrement, buyoutPrice, bidAmount, highBidder, bidderFullName, owner, ownerFullName, saleStatus, itemId = GetAuctionItemInfo("owner", i)
-        
-        -- saleStatus: 0 = active, 1 = sold
-        if saleStatus == 0 and buyoutPrice > 0 then
-            local itemLink = GetAuctionItemLink("owner", i)
-            table.insert(self.undercutResults, {
-                name = name,
-                texture = texture,
-                count = count,
-                buyout = buyoutPrice,
-                undercut = false,
-                scanning = false,
-                scanned = false,
-                link = itemLink
-            })
-            itemsToScanMap[name] = true
+    for _, res in ipairs(self.undercutResults) do
+        if not res.isSold and res.buyout > 0 then
+            itemsToScanMap[res.name] = true
+            res.scanning = false
+            res.scanned = false
         end
-    end
-
-    if #self.undercutResults == 0 then
-         self.undercutPane.status:SetText("No active auctions with buyout found.")
-         addon:EndUndercutScan()
-         return
     end
 
     self.itemsToScan = {}
@@ -214,8 +237,108 @@ function addon:StartUndercutScan()
         table.insert(self.itemsToScan, name)
     end
 
+    if #self.itemsToScan == 0 then
+        self.undercutPane.status:SetText("No active auctions to scan.")
+        addon:EndUndercutScan()
+        return
+    end
+
     self.undercutScanIndex = 1
     self:ScanNextUndercut()
+end
+
+-- Fetch player's auctions (Active & Sold)
+function addon:FetchPlayerAuctions(preserveScanResults)
+    if not addon:IsAHOpen() then return end
+
+    local scanStateMap = {}
+    if preserveScanResults and self.undercutResults then
+        for _, res in ipairs(self.undercutResults) do
+            local key = string.format("%s_%d_%d_%d", res.name, res.count, res.buyout, res.isSold and 1 or 0)
+            scanStateMap[key] = {
+                scanned = res.scanned,
+                undercut = res.undercut,
+                undercutCount = res.undercutCount,
+                delta = res.delta,
+                error = res.error
+            }
+        end
+    end
+
+    local groupedResults = {}
+    local resultsMap = {}
+    local numOwnerAuctions = GetNumAuctionItems("owner")
+    
+    if numOwnerAuctions == 0 then
+        self.undercutResults = {}
+        if self.undercutPane then
+            self.undercutPane.status:SetText("No auctions found.")
+        end
+        self:RefreshUndercutPane()
+        return
+    end
+
+    for i = 1, numOwnerAuctions do
+        local name, texture, count, quality, canUse, level, levelColHeader, minBid, minIncrement, buyoutPrice, bidAmount, highBidder, bidderFullName, owner, ownerFullName, saleStatus, itemId = GetAuctionItemInfo("owner", i)
+        
+        -- saleStatus: 0 = active, 1 = sold
+        if (saleStatus == 0 and buyoutPrice > 0) or saleStatus == 1 then
+            local itemLink = GetAuctionItemLink("owner", i)
+            local timeLeft = GetAuctionItemTimeLeft("owner", i)
+            
+            -- Key for grouping: name, stack size, buyout price, sale status
+            local key = string.format("%s_%d_%d_%d", name, count, buyoutPrice, saleStatus)
+            
+            if resultsMap[key] then
+                local res = resultsMap[key]
+                res.numStacked = res.numStacked + 1
+                -- Keep the lowest time left for the group
+                if timeLeft < res.timeLeft then
+                    res.timeLeft = timeLeft
+                    res.ownerIndex = i
+                end
+            else
+                local res = {
+                    name = name,
+                    texture = texture,
+                    count = count,
+                    buyout = buyoutPrice,
+                    payoff = bidAmount,
+                    undercut = false,
+                    scanning = false,
+                    scanned = false,
+                    link = itemLink,
+                    isSold = (saleStatus == 1),
+                    timeLeft = timeLeft,
+                    ownerIndex = i,
+                    numStacked = 1
+                }
+
+                -- Restore scan state if requested
+                if scanStateMap[key] then
+                    local s = scanStateMap[key]
+                    res.scanned = s.scanned
+                    res.undercut = s.undercut
+                    res.undercutCount = s.undercutCount
+                    res.delta = s.delta
+                    res.error = s.error
+                end
+
+                resultsMap[key] = res
+                table.insert(groupedResults, res)
+            end
+        end
+    end
+
+    self.undercutResults = groupedResults
+    if self.undercutPane then
+        if preserveScanResults then
+             -- Don't overwrite the status if we are just updating counts during cancellation
+        else
+             self.undercutPane.status:SetText(string.format("Loaded %d items (%d auctions).", #groupedResults, numOwnerAuctions))
+        end
+    end
+    self:RefreshUndercutPane()
 end
 
 function addon:ScanNextUndercut()
@@ -312,6 +435,30 @@ function addon:SearchForUndercut(itemName)
             return -- Still loading this page
         end
 
+        -- Validation: Wait for all data on the current page to be ready (owner names, etc)
+        local unknownCount = 0
+        for i = 1, batchCount do
+            local name, _, _, _, _, _, _, _, _, _, _, _, _, owner, _, _, _, hasAllInfo = GetAuctionItemInfo("list", i)
+            if not hasAllInfo or not name or name == "" or not owner or owner == "" then
+                unknownCount = unknownCount + 1
+            end
+        end
+
+        local now = GetTime()
+        local pageLoadStart = self.undercutPageLoadStartTime or now
+        if unknownCount > 0 then
+            if now - pageLoadStart < 2.0 then
+                self.undercutPageLoadStartTime = pageLoadStart
+                if self.undercutPane then
+                    self.undercutPane.status:SetText(string.format("Loading %s... (%d unknowns)", itemName, unknownCount))
+                end
+                -- We don't unregister yet, just return and wait for next event/timer
+                return
+            end
+            -- Timeout: process anyway but maybe it's partially logged
+        end
+        self.undercutPageLoadStartTime = nil -- Reset
+
         scanFrame:UnregisterAllEvents()
         
         C_Timer.After(0.1, function()
@@ -325,7 +472,9 @@ function addon:SearchForUndercut(itemName)
                 local name, texture, count, q, cu, l, lch, mb, mi, buyout, ba, hb, hbf, owner = GetAuctionItemInfo("list", i)
                 if name == itemName and buyout and buyout > 0 then
                     local unitPrice = buyout / count
-                    if owner and owner ~= UnitName("player") then
+                    local isMine = (owner == UnitName("player")) or (owner == "Unknown") -- In classic, if owner is nil it MIGHT be ours or just loading
+                    
+                    if not isMine then
                         if not minBuyoutUnit or unitPrice < minBuyoutUnit then
                             minBuyoutUnit = unitPrice
                         end
@@ -371,68 +520,63 @@ end
 function addon:CancelUndercutAuction(auction)
     if addon.isCancelling then return end
 
-    -- Need to find the current ownerIndex as it might have changed if auctions were cancelled
-    local numOwnerAuctions = GetNumAuctionItems("owner")
-    local targetIndex = nil
-    
-    for i = 1, numOwnerAuctions do
-        local name, texture, count, quality, canUse, level, levelColHeader, minBid, minIncrement, buyoutPrice, bidAmount, highBidder, bidderFullName, owner, ownerFullName, saleStatus, itemId = GetAuctionItemInfo("owner", i)
-        
-        if name == auction.name and count == auction.count and buyoutPrice == auction.buyout and saleStatus == 0 then
-            targetIndex = i
-            break
+    local function FindTargetIndex()
+        local numOwnerAuctions = GetNumAuctionItems("owner")
+        for i = 1, numOwnerAuctions do
+            local name, texture, count, q, cu, l, lch, mb, mi, buyout, ba, hb, hbf, owner, ownerFull, saleStatus = GetAuctionItemInfo("owner", i)
+            if name == auction.name and count == auction.count and buyout == auction.buyout and saleStatus == 0 then
+                return i
+            end
         end
+        return nil
     end
+
+    local targetIndex = FindTargetIndex()
     
     if targetIndex then
-        addon.isCancelling = true
-        addon:RefreshUndercutPane() -- UI updates to show locking state
-
+        -- CRITICAL: Call CancelAuction BEFORE updating any UI to avoid execution path taint
         CancelAuction(targetIndex)
-        self.print("Cancelled auction for " .. auction.name)
+
+        -- Now safe to update UI state
+        addon.isCancelling = true
+        auction.cancellingThis = true
+        addon:RefreshUndercutPane()
         
-        -- Wait for confirmation event
         if not self.cancellationListener then
             self.cancellationListener = CreateFrame("Frame")
         end
         local listener = self.cancellationListener
+        listener:UnregisterAllEvents()
         listener:RegisterEvent("AUCTION_OWNED_LIST_UPDATE")
         
-        -- Timeout safety
         if self.cancelTimeout then self.cancelTimeout:Cancel() end
         self.cancelTimeout = C_Timer.After(4.0, function()
              listener:UnregisterAllEvents()
              addon.isCancelling = false
-             -- Force remove row on timeout to prevent stuck UI
-             for i, res in ipairs(self.undercutResults) do
-                if res == auction then
-                    table.remove(self.undercutResults, i)
-                    break
-                end
-             end
+             auction.cancellingThis = false
              addon:RefreshUndercutPane()
-             addon.print("Cancellation confirmation timed out.")
         end)
         
         listener:SetScript("OnEvent", function(frame, event)
-            if event == "AUCTION_OWNED_LIST_UPDATE" then
-                -- Success!
-                frame:UnregisterAllEvents()
-                if self.cancelTimeout then self.cancelTimeout:Cancel() self.cancelTimeout = nil end
-                
-                addon.isCancelling = false
-                -- Remove from results
-                for i, res in ipairs(self.undercutResults) do
-                    if res == auction then
-                        table.remove(self.undercutResults, i)
-                        break
-                    end
-                end
-                addon:RefreshUndercutPane()
-            end
+            frame:UnregisterAllEvents()
+            if self.cancelTimeout then self.cancelTimeout:Cancel() self.cancelTimeout = nil end
+            
+            addon.isCancelling = false
+            auction.cancellingThis = false
+            
+            -- Re-fetch auctions from the server to get precise updated counts and indices
+            -- Preserve current scan results so the user doesn't lose the "Undercut" status info
+            addon:FetchPlayerAuctions(true)
         end)
     else
-        self.print("Could not find auction to cancel. It might have already been cancelled or sold.")
+        self.print("Could not find auction to cancel for " .. auction.name)
+        for i, res in ipairs(self.undercutResults) do
+            if res == auction then
+                table.remove(self.undercutResults, i)
+                break
+            end
+        end
+        addon:RefreshUndercutPane()
     end
 end
 function addon:EndUndercutScan()

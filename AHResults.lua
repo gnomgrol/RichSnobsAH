@@ -785,8 +785,11 @@ function addon:ProcessAHResults()
             local realItemId = itemId or (link and tonumber(link:match("item:(%d+)"))) or 0
             
             -- Track lowest unit price for the database
-            if not minUnitPrice or unitPrice < minUnitPrice then
-                minUnitPrice = unitPrice
+            -- FIX: Only track if the name exactly matches our search query to avoid generic search pollution
+            if name == addon.ahCurrentSearchName then
+                if not minUnitPrice or unitPrice < minUnitPrice then
+                    minUnitPrice = unitPrice
+                end
             end
 
             -- Key: strictly stable key to prevent splits
@@ -886,7 +889,8 @@ function addon:ProcessAHResults()
     -- Update database price for the scanned item
     -- We use minUnitPrice which is the absolute minimum found so far on THIS page.
     -- To ensure we always have the market price, we update it if it's different.
-    if minUnitPrice and addon.ahCurrentSearchName then
+    -- FIX: Only update database if we are performing an EXACT search (e.g. from main frame or full scan)
+    if minUnitPrice and addon.ahCurrentSearchName and addon.ahCurrentSearchIsExact then
         local oldPrice = addon.db.prices[addon.ahCurrentSearchName]
         -- On page 0, we can safely overwrite because it's the start of a new scan.
         -- On subsequent pages, we only update if the new minUnitPrice is LOWER than what we found on previous pages.

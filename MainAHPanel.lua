@@ -93,7 +93,7 @@ function addon:SelectAHPanelTab(index)
         if addon.ahResultsPane then addon.ahResultsPane:Show() end
     elseif index == 2 then
         if addon.undercutPane then addon.undercutPane:Show() end
-        addon:StartUndercutScan()
+        addon:FetchPlayerAuctions()
     elseif index == 3 then
         if addon.postPane then addon.postPane:Show() end
     end
