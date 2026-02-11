@@ -35,6 +35,46 @@ function addon:DeleteGroup(index)
     end
 end
 
+function addon:RenameGroup(index, newName)
+    if not newName or newName == "" then return end
+    if self.db.groups[index] then
+        self.db.groups[index].name = newName
+        addon:RefreshMainFrame()
+    end
+end
+
+function addon:MoveGroup(index, direction)
+    local groups = self.db.groups
+    local newIndex = index + direction
+    if newIndex < 1 or newIndex > #groups then return end
+    
+    local group = table.remove(groups, index)
+    table.insert(groups, newIndex, group)
+    
+    -- Update selection if necessary
+    if self.db.selectedGroupIndex == index then
+        self.db.selectedGroupIndex = newIndex
+    elseif self.db.selectedGroupIndex == newIndex then
+        self.db.selectedGroupIndex = index
+    end
+    
+    addon:RefreshMainFrame()
+end
+
+function addon:MoveItem(groupIndex, itemIndex, direction)
+    local group = self.db.groups[groupIndex]
+    if not group then return end
+    
+    local items = group.items
+    local newIndex = itemIndex + direction
+    if newIndex < 1 or newIndex > #items then return end
+    
+    local item = table.remove(items, itemIndex)
+    table.insert(items, newIndex, item)
+    
+    addon:RefreshMainFrame()
+end
+
 function addon:AddItemToGroup(groupIndex, itemData)
     -- itemData expected to be { link = "...", texture = "...", count = 1, reagents = { {link=..., count=...}, ... } }
     local group = self.db.groups[groupIndex]

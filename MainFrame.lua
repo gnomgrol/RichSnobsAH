@@ -53,6 +53,10 @@ function addon:CreateMainFrame()
             addon.isAHStateOpen = false
             if addon.mainAHPanel then addon.mainAHPanel:Hide() end
             if frame.fullScanBtn then frame.fullScanBtn:Disable() end
+            
+            -- Cancel all active scans when AH closes
+            if addon.EndUndercutScan then addon:EndUndercutScan() end
+            if addon.StopNormalScan then addon:StopNormalScan() end
         elseif event == "PLAYER_REGEN_DISABLED" then
             if frame:IsShown() then
                 addon:ToggleMainFrame()
@@ -226,6 +230,96 @@ function addon:CreateMainFrame()
             StaticPopup_Show("RICHSNOBSAH_CONFIRM_DELETE_GROUP")
         end
     end)
+    frame.delGroupBtn = delGroupBtn
+
+    -- Rename Group Button
+    local renameGroupBtn = CreateFrame("Button", nil, frame)
+    renameGroupBtn:SetPoint("LEFT", delGroupBtn, "RIGHT", 5, 0)
+    renameGroupBtn:SetSize(20, 20)
+    renameGroupBtn:SetNormalTexture("Interface\\Buttons\\UI-OptionsButton")
+    renameGroupBtn:SetPushedTexture("Interface\\Buttons\\UI-OptionsButton")
+    renameGroupBtn:SetHighlightTexture("Interface\\Buttons\\UI-Panel-MinimizeButton-Highlight")
+    renameGroupBtn:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText("Rename Selected Group")
+        GameTooltip:Show()
+    end)
+    renameGroupBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    renameGroupBtn:SetScript("OnClick", function()
+        if addon.db.selectedGroupIndex then
+            local group = addon.db.groups[addon.db.selectedGroupIndex]
+            StaticPopupDialogs["RICHSNOBSAH_RENAME_GROUP"] = {
+                text = "Enter new name for group '" .. (group.name or "Unknown") .. "':",
+                button1 = "Accept",
+                button2 = "Cancel",
+                hasEditBox = true,
+                timeout = 0,
+                whileDead = true,
+                hideOnEscape = true,
+                OnShow = function(self)
+                    local editBox = _G[self:GetName() .. "EditBox"]
+                    editBox:SetText(group.name or "")
+                    editBox:HighlightText()
+                    editBox:SetFocus()
+                end,
+                OnAccept = function(self)
+                    local editBox = _G[self:GetName() .. "EditBox"]
+                    local text = editBox:GetText()
+                    addon:RenameGroup(addon.db.selectedGroupIndex, text)
+                end,
+                EditBoxOnEnterPressed = function(self)
+                    local text = self:GetText()
+                    addon:RenameGroup(addon.db.selectedGroupIndex, text)
+                    self:GetParent():Hide()
+                end,
+                EditBoxOnEscapePressed = function(self)
+                    self:GetParent():Hide()
+                end
+            }
+            StaticPopup_Show("RICHSNOBSAH_RENAME_GROUP")
+        end
+    end)
+    frame.renameGroupBtn = renameGroupBtn
+
+    -- Move Up Button
+    local moveUpBtn = CreateFrame("Button", nil, frame)
+    moveUpBtn:SetPoint("LEFT", renameGroupBtn, "RIGHT", 5, 0)
+    moveUpBtn:SetSize(20, 20)
+    moveUpBtn:SetNormalTexture("Interface\\Buttons\\UI-SpellbookIcon-PrevPage-Up")
+    moveUpBtn:SetPushedTexture("Interface\\Buttons\\UI-SpellbookIcon-PrevPage-Down")
+    moveUpBtn:SetHighlightTexture("Interface\\Buttons\\UI-Common-MouseHilight")
+    moveUpBtn:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText("Move Group Up")
+        GameTooltip:Show()
+    end)
+    moveUpBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    moveUpBtn:SetScript("OnClick", function()
+        if addon.db.selectedGroupIndex then
+            addon:MoveGroup(addon.db.selectedGroupIndex, -1)
+        end
+    end)
+    frame.moveUpBtn = moveUpBtn
+
+    -- Move Down Button
+    local moveDownBtn = CreateFrame("Button", nil, frame)
+    moveDownBtn:SetPoint("LEFT", moveUpBtn, "RIGHT", 5, 0)
+    moveDownBtn:SetSize(20, 20)
+    moveDownBtn:SetNormalTexture("Interface\\Buttons\\UI-SpellbookIcon-NextPage-Up")
+    moveDownBtn:SetPushedTexture("Interface\\Buttons\\UI-SpellbookIcon-NextPage-Down")
+    moveDownBtn:SetHighlightTexture("Interface\\Buttons\\UI-Common-MouseHilight")
+    moveDownBtn:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText("Move Group Down")
+        GameTooltip:Show()
+    end)
+    moveDownBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    moveDownBtn:SetScript("OnClick", function()
+        if addon.db.selectedGroupIndex then
+            addon:MoveGroup(addon.db.selectedGroupIndex, 1)
+        end
+    end)
+    frame.moveDownBtn = moveDownBtn
 
     -- ITEMS PANE (Right Side)
     local itemFrame = CreateFrame("Frame", nil, frame, "BackdropTemplate")
@@ -514,7 +608,7 @@ function addon:CreateMainFrame()
         row.iconBtn = iconBtn
         
         local nameStr = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        nameStr:SetPoint("LEFT", iconBtn, "RIGHT", 5, 0)
+        nameStr:SetPoint("LEFT", iconBtn, "RIGHT", 5, 5)
         row.name = nameStr
         nameStr:SetFontObject("GameFontNormalSmall")
         
@@ -543,8 +637,36 @@ function addon:CreateMainFrame()
         end)
         row.postItemBtn = postItemBtn
 
+        -- Move Item Up Button
+        local moveItemUpBtn = CreateFrame("Button", nil, row)
+        moveItemUpBtn:SetWidth(24); moveItemUpBtn:SetHeight(24)
+        moveItemUpBtn:SetPoint("RIGHT", postItemBtn, "LEFT", -5, 0)
+        moveItemUpBtn:SetNormalTexture("Interface\\Buttons\\UI-ScrollBar-ScrollUpButton-Up")
+        moveItemUpBtn:SetPushedTexture("Interface\\Buttons\\UI-ScrollBar-ScrollUpButton-Down")
+        moveItemUpBtn:SetHighlightTexture("Interface\\Buttons\\UI-Common-MouseHilight")
+        moveItemUpBtn:SetScript("OnClick", function(self)
+             if row.itemIndex and addon.db.selectedGroupIndex then
+                addon:MoveItem(addon.db.selectedGroupIndex, row.itemIndex, -1)
+             end
+        end)
+        row.moveItemUpBtn = moveItemUpBtn
+
+        -- Move Item Down Button
+        local moveItemDownBtn = CreateFrame("Button", nil, row)
+        moveItemDownBtn:SetWidth(24); moveItemDownBtn:SetHeight(24)
+        moveItemDownBtn:SetPoint("RIGHT", moveItemUpBtn, "LEFT", -2, 0)
+        moveItemDownBtn:SetNormalTexture("Interface\\Buttons\\UI-ScrollBar-ScrollDownButton-Up")
+        moveItemDownBtn:SetPushedTexture("Interface\\Buttons\\UI-ScrollBar-ScrollDownButton-Down")
+        moveItemDownBtn:SetHighlightTexture("Interface\\Buttons\\UI-Common-MouseHilight")
+        moveItemDownBtn:SetScript("OnClick", function(self)
+             if row.itemIndex and addon.db.selectedGroupIndex then
+                addon:MoveItem(addon.db.selectedGroupIndex, row.itemIndex, 1)
+             end
+        end)
+        row.moveItemDownBtn = moveItemDownBtn
+
         local profitStr = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        profitStr:SetPoint("RIGHT", postItemBtn, "LEFT", -5, 0)
+        profitStr:SetPoint("TOPLEFT", nameStr, "BOTTOMLEFT", 0, -2)
         row.profitText = profitStr
         
         -- Reagents container (initially hidden)
@@ -639,6 +761,35 @@ function addon:RefreshMainFrame()
             row:Hide()
         end
     end
+
+    -- Update Group Management Buttons
+    if self.db.selectedGroupIndex then
+        self.mainFrame.delGroupBtn:Enable()
+        self.mainFrame.renameGroupBtn:Enable()
+        
+        if self.db.selectedGroupIndex > 1 then
+            self.mainFrame.moveUpBtn:Enable()
+            self.mainFrame.moveUpBtn:GetNormalTexture():SetDesaturated(false)
+        else
+            self.mainFrame.moveUpBtn:Disable()
+            self.mainFrame.moveUpBtn:GetNormalTexture():SetDesaturated(true)
+        end
+        
+        if self.db.selectedGroupIndex < numGroups then
+            self.mainFrame.moveDownBtn:Enable()
+            self.mainFrame.moveDownBtn:GetNormalTexture():SetDesaturated(false)
+        else
+            self.mainFrame.moveDownBtn:Disable()
+            self.mainFrame.moveDownBtn:GetNormalTexture():SetDesaturated(true)
+        end
+    else
+        self.mainFrame.delGroupBtn:Disable()
+        self.mainFrame.renameGroupBtn:Disable()
+        self.mainFrame.moveUpBtn:Disable()
+        self.mainFrame.moveUpBtn:GetNormalTexture():SetDesaturated(true)
+        self.mainFrame.moveDownBtn:Disable()
+        self.mainFrame.moveDownBtn:GetNormalTexture():SetDesaturated(true)
+    end
     
     -- Update AH Status Indicator
     local ahOpen = addon:IsAHOpen()
@@ -694,14 +845,16 @@ function addon:RefreshMainFrame()
                 local isCraftable = item.reagents and #item.reagents > 0
                 local countText = ""
                 
+                local bagCount = 0
+                if item.link then
+                    bagCount = (C_Item and C_Item.GetItemCount(item.link, false)) or GetItemCount(item.link, false)
+                end
+
                 if isCraftable then
-                    -- Craftable item: show craftable count and profit
+                    -- Craftable item: show bag count + craftable count and profit
                     local craftCount = addon:GetMaxCraftable(item)
-                    if craftCount > 0 then
-                        countText = " |cff00ff00[x" .. craftCount .. "]|r"
-                    else
-                        countText = " |cffff0000[x0]|r"
-                    end
+                    local color = (bagCount + craftCount > 0) and "|cff00ff00" or "|cffff0000"
+                    countText = string.format(" %s[x%d +%d]|r", color, bagCount, craftCount)
 
                     local craftCost = addon:CalculateCraftCost(item)
                     local sellPrice = addon:GetItemPrice(item.recipeName)
@@ -732,15 +885,8 @@ function addon:RefreshMainFrame()
                     end
                 else
                     -- Non-craftable item: show bag count and AH price
-                    local bagCount = 0
-                    if item.link then
-                        bagCount = (C_Item and C_Item.GetItemCount(item.link, false)) or GetItemCount(item.link, false)
-                    end
-                    if bagCount > 0 then
-                        countText = " |cff00ff00[x" .. bagCount .. "]|r"
-                    else
-                        countText = " |cffff0000[x0]|r"
-                    end
+                    local color = (bagCount > 0) and "|cff00ff00" or "|cffff0000"
+                    countText = string.format(" %s[x%d]|r", color, bagCount)
 
                     -- Show AH price
                     local ahPrice = 0
@@ -763,7 +909,6 @@ function addon:RefreshMainFrame()
 
                 row.name:SetText((item.link or "Unknown Item") .. countText)
                 row.icon:SetTexture(item.texture or "Interface\\Icons\\Inv_Misc_QuestionMark")
-
                 -- Enable/Disable Post button based on AH state
                 if addon:IsAHOpen() then
                     row.postItemBtn:Enable()
@@ -771,6 +916,24 @@ function addon:RefreshMainFrame()
                     row.postItemBtn:Disable()
                 end
                 
+                -- Update item move buttons
+                local numItems = #items
+                if i > 1 then
+                    row.moveItemUpBtn:Enable()
+                    row.moveItemUpBtn:GetNormalTexture():SetDesaturated(false)
+                else
+                    row.moveItemUpBtn:Disable()
+                    row.moveItemUpBtn:GetNormalTexture():SetDesaturated(true)
+                end
+                
+                if i < numItems then
+                    row.moveItemDownBtn:Enable()
+                    row.moveItemDownBtn:GetNormalTexture():SetDesaturated(false)
+                else
+                    row.moveItemDownBtn:Disable()
+                    row.moveItemDownBtn:GetNormalTexture():SetDesaturated(true)
+                end
+
                 -- Setup Reagents
                 if item.expanded then
                     -- layout reagents

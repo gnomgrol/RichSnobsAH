@@ -158,28 +158,32 @@ function addon:RefreshUndercutPane()
             if auction.isSold then
                 row.statusText:SetText("|cff00ff00Sold!|r " .. self:FormatMoney(auction.payoff) .. "\n|cffaaaaaa" .. self:FormatTime(auction.timeLeft) .. "|r")
                 row.cancelBtn:Disable()
-            elseif auction.scanning or (addon.isCancelling and auction.cancellingThis) then
-                row.statusText:SetText(auction.scanning and "|cffffff00Scanning...|r" or "|cffffff00Cancelling...|r")
+            elseif auction.cancellingThis then
+                row.statusText:SetText("|cffffff00Cancelling...|r")
+                row.cancelBtn:Disable()
+            elseif auction.error then
+                row.statusText:SetText("|cffff0000Error: " .. auction.error .. "|r")
+                row.cancelBtn:Enable()
+            elseif auction.scanning then
+                row.statusText:SetText("|cffffff00Scanning...|r")
                 row.cancelBtn:Disable()
             elseif addon.isCancelling then
                 row.statusText:SetText("|cffaaaaaaQueued...|r")
                 row.cancelBtn:Disable()
-            elseif not auction.scanned then
-                -- Only show "Queued" if we are actually in a scan session
+            elseif auction.scanned then
+                if auction.undercut then
+                    row.statusText:SetText("|cffff0000" .. (auction.undercutCount or 1) .. " undercuts\n" .. self:FormatMoney(auction.delta) .. "|r")
+                else
+                    row.statusText:SetText("|cff00ff00Cheapest!|r")
+                end
+                row.cancelBtn:Enable()
+            else
+                -- Not scanned yet
                 if addon.isUndercutScan then
                     row.statusText:SetText("|cffaaaaaaQueued...|r")
                 else
                     row.statusText:SetText("|cffaaaaaa" .. self:FormatMoney(auction.buyout) .. "|r")
                 end
-                row.cancelBtn:Enable()
-            elseif auction.error then
-                row.statusText:SetText("|cffff0000Error: " .. auction.error .. "|r")
-                row.cancelBtn:Enable()
-            elseif auction.undercut then
-                row.statusText:SetText("|cffff0000" .. (auction.undercutCount or 1) .. " undercuts\n" .. self:FormatMoney(auction.delta) .. "|r")
-                row.cancelBtn:Enable()
-            else
-                row.statusText:SetText("|cff00ff00Cheapest!|r")
                 row.cancelBtn:Enable()
             end
             
@@ -348,6 +352,9 @@ function addon:ScanNextUndercut()
         return 
     end
 
+    -- Guard: Prevent starting a new search if one is already active or throttled
+    if self.isSearchingForUndercut then return end
+
     if self.undercutScanIndex > #self.itemsToScan then
         self.undercutPane.status:SetText("Undercut scan finished.")
         self.isUndercutScan = false
@@ -377,12 +384,23 @@ function addon:ScanNextUndercut()
 end
 
 function addon:SearchForUndercut(itemName)
+    -- Lock search
+    self.isSearchingForUndercut = true
+
     local canQuery = CanSendAuctionQuery()
     if not canQuery then
         if self.undercutPane then
             self.undercutPane.status:SetText(string.format("|cffff0000Throttled (Wait)|r - Scanning %s", itemName))
+            -- Ensure rows also show Scanning... state even while waiting for AH
+            addon:RefreshUndercutPane()
         end
-        C_Timer.After(1.0, function() addon:SearchForUndercut(itemName) end)
+        C_Timer.After(1.0, function() 
+            if self.isUndercutScan then
+                -- Reset lock briefly to allow re-entry
+                self.isSearchingForUndercut = false
+                addon:SearchForUndercut(itemName) 
+            end
+        end)
         return
     end
 
@@ -409,6 +427,7 @@ function addon:SearchForUndercut(itemName)
             end
         end
         
+        self.isSearchingForUndercut = false
         addon:ScanNextUndercut()
     end)
 
@@ -510,7 +529,10 @@ function addon:SearchForUndercut(itemName)
             end
             
             addon:RefreshUndercutPane()
-            C_Timer.After(0.2, function() addon:ScanNextUndercut() end)
+            C_Timer.After(0.2, function() 
+                self.isSearchingForUndercut = false
+                addon:ScanNextUndercut() 
+            end)
         end)
     end)
 
@@ -581,17 +603,35 @@ function addon:CancelUndercutAuction(auction)
 end
 function addon:EndUndercutScan()
     self.isUndercutScan = false
+    self.isSearchingForUndercut = false
+    
+    -- Cleanup search logic
+    if self.undercutScanFrame then
+        self.undercutScanFrame:UnregisterAllEvents()
+    end
+    if self.undercutTimeout then
+        self.undercutTimeout:Cancel()
+        self.undercutTimeout = nil
+    end
+    self.undercutPageLoadStartTime = nil
+
     if self.undercutResults then
         for _, auction in ipairs(self.undercutResults) do
-            -- If we were just scanning this, it's now done
+            -- If we were just scanning this, it's now done (but no results applied)
             if auction.scanning then
-                auction.scanned = true
+                auction.scanned = false -- Reset if unfinished
             end
             auction.scanning = false
         end
     end
-    if self.undercutPane and self.undercutPane.scanBtn then
-        self.undercutPane.scanBtn:Enable()
+    if self.undercutPane then
+        if self.undercutPane.scanBtn then
+            self.undercutPane.scanBtn:Enable()
+        end
+        -- If AH is closed, update status
+        if not addon:IsAHOpen() then
+            self.undercutPane.status:SetText("Scan stopped (AH Closed)")
+        end
     end
     if addon.fullScanBtn then addon.fullScanBtn:Enable() end
     if addon.importBtn then addon.importBtn:Enable() end
