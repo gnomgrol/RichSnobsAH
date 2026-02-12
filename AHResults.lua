@@ -143,15 +143,6 @@ auctionEventFrame:SetScript("OnEvent", function(self, event, arg1, arg2)
         local shouldRemove = false
         -- ERR_AUCTION_NOT_FOUND is usually "The item was not found"
         if msg == ERR_AUCTION_NOT_FOUND or msg:find("not found") then
-                -- Check if we JUST bought it.
-                local now = GetTime()
-                local recentlyBought = (pendingItem.purchaseTime and (now - pendingItem.purchaseTime < 3))
-                                    or (addon.lastPurchaseSuccessTime and (now - addon.lastPurchaseSuccessTime < 3))
-                
-                if recentlyBought then
-                    return
-                end
-                
                 addon:ResetPurchaseState()
                 addon:UpdateStatusText("Item not found (Gone)")
                 shouldRemove = true
@@ -476,7 +467,7 @@ function addon:StopNormalScan()
     addon.pendingSearch = nil
     -- addon.ahCurrentSearchName = nil -- FIXED: Preserve this for purchase navigation!
     addon.ahIsBuying = false
-    addon.ahIsScanning = false
+    addon.ahIsScanning = false -- Ensure we stop processing events
     addon.isPostScan = false
     addon.isUndercutScan = false
 end
@@ -499,6 +490,18 @@ function addon:SetAHBuyoutSort()
     end
 end
 
+function addon:ClearAHResultsState()
+    addon.ahSearchResults = {}
+    addon.pageResults = {}
+    addon.groupedResultsMap = {}
+    addon.ahCurrentPage = 0
+    addon.ahTotalPages = 0
+    addon.ahLastProcessedPage = -1
+    addon.ahLastPageHash = ""
+    addon.ahWaitingForPageUpdate = false
+    addon.ahIsScanning = false
+end
+
 -- Search AH for an item
 function addon:SearchAH(link, isExact)
     -- Switch to the Buy tab to show results
@@ -518,9 +521,16 @@ function addon:SearchAH(link, isExact)
         addon.ahResultsPane.searchEdit:SetText(name)
     end
 
-    -- IMMEDIATELY stop any ongoing scan/pane activity
+    -- IMMEDIATELY stop any ongoing scan/pane activity and clear results
     addon:StopNormalScan()
+    addon:ClearAHResultsState()
+    addon:RefreshAHResults() -- Clear the UI immediately
     
+    if addon.ahResultsPane then
+        addon.ahResultsPane.progress:SetText("Initiating search...")
+        addon.ahResultsPane.currentPage:SetText("")
+    end
+
     if addon.undercutPane and addon.undercutPane:IsShown() then
         addon.undercutPane:Hide()
     end
@@ -534,7 +544,7 @@ function addon:SearchAH(link, isExact)
         addon.print("Search throttled. Retrying in 1s...")
         if addon.ahResultsPane then
             addon:UpdateStatusText("|cffff0000Throttled (Wait)|r")
-            addon.ahResultsPane.progress:SetText("Search blocked (Auto-retry in 1s)")
+            addon.ahResultsPane.progress:SetText("|cffffff00Throttled (Auto-retry)|r")
         end
         
         -- Store pending search and schedule retry
@@ -568,18 +578,9 @@ function addon:SearchAH(link, isExact)
 
     addon.ahCurrentSearchName = name
     addon.ahCurrentSearchIsExact = isExact
-    addon.ahSearchResults = {}
-    addon.pageResults = {}
-    addon.groupedResultsMap = {}
+    addon.ahIsScanning = true -- Set THIS as the actual scan start signal
     addon.ahCurrentPage = 0
-    addon.ahTotalPages = 0
     addon.ahLastProcessedPage = -1
-    addon.ahLastPageHash = ""
-    addon.ahIsWaitingForNextPage = false
-    addon.ahIsBuying = false
-    addon.ahIsScanning = true
-    addon.ahPendingItem = nil
-    addon.ahScanRetryCount = 0
     addon.ahPageBufferWaitCount = 0
     addon.ahQueryCountForPage = 1
     addon.ahWaitingForPageUpdate = true
@@ -661,6 +662,8 @@ end
 
 -- Process AH results after query completes
 function addon:ProcessAHResults()
+    if not addon.ahIsScanning or addon.ahIsBuying then return end
+
     local batchCount, totalCount = GetNumAuctionItems("list")
     
     -- If we get 0/0, it might be that the page is still loading or it's actually empty.

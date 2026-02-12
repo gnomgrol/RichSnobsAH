@@ -215,7 +215,7 @@ function addon:RefreshUndercutPane()
     local totalActive = 0
     for _, res in ipairs(results) do
         if res.isSold then
-            totalSold = totalSold + (res.payoff or 0)
+            totalSold = totalSold + ((res.payoff or 0) * (res.numStacked or 1))
         else
             totalActive = totalActive + ((res.buyout or 0) * (res.numStacked or 1))
         end
@@ -316,8 +316,9 @@ function addon:FetchPlayerAuctions(preserveScanResults)
             local itemLink = GetAuctionItemLink("owner", i)
             local timeLeft = GetAuctionItemTimeLeft("owner", i)
             
-            -- Key for grouping: name, stack size, buyout price, sale status
-            local key = string.format("%s_%d_%d_%d", name, count, buyoutPrice, saleStatus)
+            -- Key for grouping: name, stack size, buyout/payoff price, sale status
+            local priceKey = (saleStatus == 1) and bidAmount or buyoutPrice
+            local key = string.format("%s_%d_%d_%d", name, count, priceKey, saleStatus)
             
             if resultsMap[key] then
                 local res = resultsMap[key]
