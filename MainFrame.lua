@@ -34,6 +34,8 @@ function addon:CreateMainFrame()
     frame:RegisterEvent("BAG_UPDATE")
     frame:RegisterEvent("BAG_UPDATE_DELAYED")
     frame:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
+    frame:RegisterEvent("TRADE_SKILL_UPDATE")
+    frame:RegisterEvent("CRAFT_UPDATE")
     
     -- AH Events (Safe registration)
     frame:RegisterEvent("AUCTION_HOUSE_SHOW")
@@ -64,7 +66,12 @@ function addon:CreateMainFrame()
         end
         
         if self:IsShown() then
-            addon:RefreshMainFrame()
+            -- Small delay ensures the game has finished updating internal state (item counts, etc)
+            C_Timer.After(0.1, function()
+                if self:IsShown() then
+                    addon:RefreshMainFrame()
+                end
+            end)
         end
     end)
     
@@ -475,14 +482,30 @@ function addon:CreateMainFrame()
         
         addon.print("Attempting to craft " .. maxCraft .. "x " .. item.recipeName)
         
-        -- Check if profession window is already open before calling CastSpellByName
+        -- Check if profession window is already open and for the CORRECT profession
         local windowAlreadyOpen = false
         if item.isCraft then
             -- Enchanting uses CraftFrame
-            windowAlreadyOpen = CraftFrame and CraftFrame:IsVisible()
+            if CraftFrame and CraftFrame:IsVisible() then
+                local currentProf = GetCraftDisplaySkillLine()
+                if currentProf == item.profession then
+                    windowAlreadyOpen = true
+                else
+                    -- Wrong profession open, close it
+                    CloseCraft()
+                end
+            end
         else
             -- Other professions use TradeSkillFrame
-            windowAlreadyOpen = TradeSkillFrame and TradeSkillFrame:IsVisible()
+            if TradeSkillFrame and TradeSkillFrame:IsVisible() then
+                local currentProf = GetTradeSkillLine()
+                if currentProf == item.profession then
+                    windowAlreadyOpen = true
+                else
+                    -- Wrong profession open, close it
+                    CloseTradeSkill()
+                end
+            end
         end
         
         -- Helper function to execute the actual crafting
@@ -590,6 +613,14 @@ function addon:CreateMainFrame()
         nameStr:SetPoint("LEFT", iconBtn, "RIGHT", 5, 5)
         row.name = nameStr
         nameStr:SetFontObject("GameFontNormalSmall")
+        nameStr:SetWordWrap(false)
+        nameStr:SetJustifyH("LEFT")
+
+        local countStr = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        row.countText = countStr
+
+        local extraCountStr = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        row.extraCountText = extraCountStr
         
         local delBtn = CreateFrame("Button", nil, row, "UIPanelCloseButton")
         delBtn:SetWidth(24); delBtn:SetHeight(24)
@@ -643,6 +674,11 @@ function addon:CreateMainFrame()
              end
         end)
         row.moveItemDownBtn = moveItemDownBtn
+
+        -- Anchor count text to the left of moveItemDownBtn
+        row.countText:SetPoint("RIGHT", moveItemDownBtn, "LEFT", -5, 5)
+        row.extraCountText:SetPoint("RIGHT", moveItemDownBtn, "LEFT", -5, -6)
+        row.name:SetPoint("RIGHT", row.countText, "LEFT", -5, 0)
 
         local profitStr = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         profitStr:SetPoint("TOPLEFT", nameStr, "BOTTOMLEFT", 0, -2)
@@ -827,15 +863,26 @@ function addon:RefreshMainFrame()
                 local countText = ""
                 
                 local bagCount = 0
+                local ahCount = 0
                 if item.link then
                     bagCount = (C_Item and C_Item.GetItemCount(item.link, false)) or GetItemCount(item.link, false)
+                    local itemName = GetItemInfo(item.link) or item.link:match("%[(.-)%]")
+                    if itemName then
+                        ahCount = addon:GetAHItemCount(itemName)
+                    end
                 end
+
+                local bColor = bagCount > 0 and "|cff00ff00" or "|cffffffff"
+                local aColor = ahCount > 0 and "|cff00ff00" or "|cffffffff"
 
                 if isCraftable then
                     -- Craftable item: show bag count + craftable count and profit
                     local craftCount = addon:GetMaxCraftable(item)
-                    local color = (bagCount + craftCount > 0) and "|cff00ff00" or "|cffff0000"
-                    countText = string.format(" %s[x%d +%d]|r", color, bagCount, craftCount)
+                    local cColor = craftCount > 0 and "|cff00ff00" or "|cffffffff"
+                    
+                    row.countText:SetText(string.format("|cffaaaaaa[|r%sB:%d|r %sAH:%d|r|cffaaaaaa]|r", bColor, bagCount, aColor, ahCount))
+                    row.extraCountText:SetText(string.format("Craft: |cffaaaaaa|r%s[%d]|r|cffaaaaaa|r", cColor, craftCount))
+                    row.extraCountText:Show()
 
                     local craftCost = addon:CalculateCraftCost(item)
                     local sellPrice = addon:GetItemPrice(item.recipeName)
@@ -866,8 +913,8 @@ function addon:RefreshMainFrame()
                     end
                 else
                     -- Non-craftable item: show bag count and AH price
-                    local color = (bagCount > 0) and "|cff00ff00" or "|cffff0000"
-                    countText = string.format(" %s[x%d]|r", color, bagCount)
+                    row.countText:SetText(string.format("|cffaaaaaa[|r%sB:%d|r %sAH:%d|r|cffaaaaaa]|r", bColor, bagCount, aColor, ahCount))
+                    row.extraCountText:Hide()
 
                     -- Show AH price
                     local ahPrice = 0
@@ -888,7 +935,7 @@ function addon:RefreshMainFrame()
                     end
                 end
 
-                row.name:SetText((item.link or "Unknown Item") .. countText)
+                row.name:SetText(item.link or "Unknown Item")
                 row.icon:SetTexture(item.texture or "Interface\\Icons\\Inv_Misc_QuestionMark")
                 -- Enable/Disable Post button based on AH state
                 if addon:IsAHOpen() then

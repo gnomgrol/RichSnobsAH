@@ -1183,7 +1183,7 @@ function addon:RefreshAHResults()
                 if result.quantity > 1 then
                     GameTooltip:AddLine("Available: " .. result.quantity .. " stacks", 1, 1, 1)
                 end
-                GameTooltip:AddLine("Total Buyout: " .. addon:FormatMoney(result.buyout))
+                GameTooltip:AddLine("Total Buyout: " .. addon:FormatMoney(result.buyout, true))
                 if result.itemId then
                     GameTooltip:AddLine("Item ID: " .. result.itemId, 0.5, 0.5, 0.5)
                 end

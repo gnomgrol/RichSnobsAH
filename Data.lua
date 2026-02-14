@@ -7,11 +7,13 @@ function addon:InitializeData()
             groups = {}, -- list of groups: { name = "Consumables", items = {} }
             selectedGroupIndex = nil,
             prices = {}, -- [itemId or name] = copper
+            ahCounts = {}, -- [characterName] = { [itemName] = count }
             fastScan = false,
         }
     end
     self.db = RichSnobsAHDB
     if not self.db.prices then self.db.prices = {} end
+    if not self.db.ahCounts then self.db.ahCounts = {} end
     if self.db.fastScan == nil then self.db.fastScan = false end
 end
 
@@ -97,6 +99,34 @@ end
 
 function addon:GetItemPrice(itemName)
     return self.db.prices[itemName] or 0
+end
+
+function addon:UpdateAHCounts()
+    local player = UnitName("player")
+    if not player then return end
+    
+    self.db.ahCounts[player] = {}
+    local numOwnerAuctions = GetNumAuctionItems("owner")
+    
+    for i = 1, numOwnerAuctions do
+        local name, _, count, _, _, _, _, _, _, _, _, _, _, _, _, saleStatus = GetAuctionItemInfo("owner", i)
+        if name and saleStatus == 0 then -- 0 = active
+            self.db.ahCounts[player][name] = (self.db.ahCounts[player][name] or 0) + count
+        end
+    end
+    
+    if self.mainFrame and self.mainFrame:IsShown() then
+        self:RefreshMainFrame()
+    end
+end
+
+function addon:GetAHItemCount(itemName)
+    if not itemName then return 0 end
+    local total = 0
+    for charName, counts in pairs(self.db.ahCounts) do
+        total = total + (counts[itemName] or 0)
+    end
+    return total
 end
 
 function addon:UpdateItemPrice(itemName, unitPrice, pageNum)

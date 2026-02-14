@@ -195,6 +195,15 @@ function addon:CreatePostPane(parentFrame)
 
     pane.postBtn = postBtn
     
+    local selectNextBtn = CreateFrame("Button", "RichSnobsAHSelectNextButton", pane, "UIPanelButtonTemplate")
+    selectNextBtn:SetSize(160, 22)
+    selectNextBtn:SetPoint("BOTTOM", 0, 42)
+    selectNextBtn:SetText("Select next from list")
+    selectNextBtn:SetScript("OnClick", function()
+        addon:PostNextFromList()
+    end)
+    pane.selectNextBtn = selectNextBtn
+    
     -- Drop to Sell Field
     local sellDrop = CreateFrame("Button", "RichSnobsAHSellDrop", pane, "BackdropTemplate")
     sellDrop:SetSize(40, 40)
@@ -335,6 +344,7 @@ function addon:SelectPostItem(item)
     end
 
     self:UpdatePostButtonText()
+    self:UpdateSelectNextButtonText()
 end
 
 function addon:UpdatePostButtonText()
@@ -386,7 +396,7 @@ function addon:RefreshPostAHList()
             end
             row.text:SetText(nameText)
             
-            row.price:SetText(self:FormatMoney(data.unitPrice))
+            row.price:SetText(self:FormatMoney(data.unitPrice, true))
             row.data = data
             
             if self.postPane.selectedAHData == data then
@@ -429,7 +439,7 @@ function addon:SelectAHPrice(data)
     self.postPane.selectedAHData = data
     
     if self.postPane.priceLabel then
-        self.postPane.priceLabel:SetText(string.format("Bid: %s   Buyout: %s", self:FormatMoney(suggestedBid), self:FormatMoney(suggestedBuyout)))
+        self.postPane.priceLabel:SetText(string.format("Bid: %s   Buyout: %s", self:FormatMoney(suggestedBid, true), self:FormatMoney(suggestedBuyout, true)))
     end
     
     self:RefreshPostAHList()
@@ -441,6 +451,7 @@ function addon:ScanForItemPrice(itemName)
     local canQuery = CanSendAuctionQuery()
     if not canQuery then
         self.postPane.scanStatus:SetText("|cffff0000Throttled (Wait)|r")
+        self:UpdateSelectNextButtonText()
         C_Timer.After(1.0, function() addon:ScanForItemPrice(itemName) end)
         return
     end
@@ -579,12 +590,18 @@ function addon:ProcessPostScanResults(itemName)
     end
     self:RefreshPostAHList()
     self:UpdatePostButtonText()
+    
+    self:UpdateSelectNextButtonText()
+    
     self.isPostScan = false
 end
 
 -- Execute the preparation for posting (putting item in slot and setting prices)
 -- This is called during PreClick for the SecureActionButton
 function addon:ExecutePostPreparation()
+    self.isPostScan = false
+    self:UpdateSelectNextButtonText()
+
     local pane = self.postPane
     if not pane.selectedItem or not pane.suggestedBuyout then
         return
@@ -662,4 +679,72 @@ function addon:ExecutePostPreparation()
     PostAuction(totalBid, totalBuyout, 1, stackSize, 1, true)
 
     -- Post message sent; count will be updated on confirmation in AHResults.lua
+end
+
+function addon:UpdateSelectNextButtonText()
+    if not self.postPane or not self.postPane.selectNextBtn or not self.postPane:IsShown() then return end
+    
+    local canQuery = CanSendAuctionQuery()
+    local isScanning = self.isPostScan
+    
+    self:SafeSetBtnEnabled(self.postPane.selectNextBtn, canQuery and not isScanning)
+    
+    if isScanning then
+        self.postPane.selectNextBtn:SetText("Scanning...")
+    elseif not canQuery then
+        self.postPane.selectNextBtn:SetText("Throttled...")
+        -- Auto-refresh when throttle might have cleared
+        if not self.postPane.throttleTimer then
+            self.postPane.throttleTimer = C_Timer.After(1.0, function()
+                self.postPane.throttleTimer = nil
+                self:UpdateSelectNextButtonText()
+            end)
+        end
+    else
+        self.postPane.selectNextBtn:SetText("Select next from list")
+    end
+end
+
+function addon:PostNextFromList()
+    if not self.db.selectedGroupIndex then
+        self.print("No list selected.")
+        return
+    end
+    
+    local group = self.db.groups[self.db.selectedGroupIndex]
+    if not group or not group.items or #group.items == 0 then
+        self.print("Selected list is empty.")
+        return
+    end
+    
+    -- Find current index to start "next" search
+    local currentIndex = 0
+    if self.postPane.selectedItem then
+        for i, item in ipairs(group.items) do
+            if item.link == self.postPane.selectedItem.link then
+                currentIndex = i
+                break
+            end
+        end
+    end
+    
+    -- Search for next item in bags
+    local nextItem = nil
+    for i = 1, #group.items do
+        local index = ((currentIndex + i - 1) % #group.items) + 1
+        local item = group.items[index]
+        
+        if self:GetBagItemCount(item.link) > 0 then
+            nextItem = item
+            break
+        end
+    end
+    
+    if nextItem then
+        self:SelectPostItem(nextItem)
+        self:UpdateSelectNextButtonText()
+    else
+        self.print("No items from the current list found in your bags.")
+        self:UpdateSelectNextButtonText()
+    end
 end

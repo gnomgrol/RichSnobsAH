@@ -63,10 +63,16 @@ function addon:CreateUndercutPane(parentFrame)
         local name = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
         name:SetPoint("LEFT", icon, "RIGHT", 5, 0)
         name:SetWidth(150); name:SetJustifyH("LEFT")
+        name:SetWordWrap(false)
         row.name = name
 
+        local stackCount = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        stackCount:SetPoint("LEFT", name, "RIGHT", 2, 0)
+        stackCount:SetWidth(40); stackCount:SetJustifyH("CENTER")
+        row.stackCount = stackCount
+
         local statusText = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        statusText:SetPoint("LEFT", name, "RIGHT", 5, 0)
+        statusText:SetPoint("LEFT", stackCount, "RIGHT", 5, 0)
         statusText:SetWidth(100); statusText:SetJustifyH("LEFT")
         row.statusText = statusText
 
@@ -180,13 +186,12 @@ function addon:RefreshUndercutPane()
             local auction = results[index]
             row.icon:SetTexture(auction.texture or "Interface\\Icons\\Inv_Misc_QuestionMark")
             local nameText = (auction.link or auction.name) .. (auction.count > 1 and (" x" .. auction.count) or "")
-            if auction.numStacked and auction.numStacked > 1 then
-                nameText = nameText .. " |cffaaaaaa(" .. auction.numStacked .. ")|r"
-            end
             row.name:SetText(nameText)
             
+            row.stackCount:SetText("|cff00ff00" .. "[" ..(auction.numStacked or 1) .. "]|r")
+            
             if auction.isSold then
-                row.statusText:SetText("|cff00ff00Sold!|r " .. self:FormatMoney(auction.payoff) .. "\n|cffaaaaaa" .. self:FormatTime(auction.timeLeft) .. "|r")
+                row.statusText:SetText("|cff00ff00Sold!|r " .. self:FormatTime(auction.timeLeft) .. "\n|cffaaaaaa" .. self:FormatMoney(auction.payoff, true) .. "|r")
                 row.cancelBtn:Disable()
             elseif auction.cancellingThis then
                 row.statusText:SetText("|cffffff00Cancelling...|r")
@@ -202,7 +207,7 @@ function addon:RefreshUndercutPane()
                 row.cancelBtn:Disable()
             elseif auction.scanned then
                 if auction.undercut then
-                    row.statusText:SetText("|cffff0000" .. (auction.undercutCount or 1) .. " undercuts\n" .. self:FormatMoney(auction.delta) .. "|r")
+                    row.statusText:SetText("|cffff0000" .. (auction.undercutCount or 1) .. " undercuts\n" .. self:FormatMoney(auction.delta, true) .. "|r")
                 else
                     row.statusText:SetText("|cff00ff00Cheapest!|r")
                 end
@@ -212,7 +217,7 @@ function addon:RefreshUndercutPane()
                 if addon.isUndercutScan then
                     row.statusText:SetText("|cffaaaaaaQueued...|r")
                 else
-                    row.statusText:SetText("|cffaaaaaa" .. self:FormatMoney(auction.buyout) .. "|r")
+                    row.statusText:SetText("|cffaaaaaa" .. self:FormatMoney(auction.buyout, true) .. "|r")
                 end
                 row.cancelBtn:Enable()
             end
@@ -322,6 +327,7 @@ function addon:FetchPlayerAuctions(preserveScanResults)
         if self.undercutPane then
             self.undercutPane.status:SetText("No auctions found.")
         end
+        addon:UpdateAHCounts() -- Update even if 0
         self:RefreshUndercutPane()
         return
     end
@@ -387,6 +393,7 @@ function addon:FetchPlayerAuctions(preserveScanResults)
              self.undercutPane.status:SetText(string.format("Loaded %d items (%d auctions).", #groupedResults, numOwnerAuctions))
         end
     end
+    addon:UpdateAHCounts()
     self:RefreshUndercutPane()
 end
 
