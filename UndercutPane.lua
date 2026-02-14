@@ -145,11 +145,29 @@ function addon:RefreshUndercutPane()
         if a.isSold ~= b.isSold then
             return not a.isSold
         end
-        if a.isSold then
-            return (a.timeLeft or 0) < (b.timeLeft or 0)
+        
+        -- Primary sort by name to keep list stable
+        if a.name ~= b.name then
+            return a.name < b.name
         end
-        -- Secondary sort within groups: by name
-        return a.name < b.name
+        
+        if a.isSold then
+            -- For sold items, keep the timeLeft sort within the same name group
+            if (a.timeLeft or 0) ~= (b.timeLeft or 0) then
+                return (a.timeLeft or 0) < (b.timeLeft or 0)
+            end
+        else
+            -- For active items, sort by buyout then count
+            if (a.buyout or 0) ~= (b.buyout or 0) then
+                return (a.buyout or 0) < (b.buyout or 0)
+            end
+            if (a.count or 0) ~= (b.count or 0) then
+                return (a.count or 0) < (b.count or 0)
+            end
+        end
+        
+        -- Final tie-breaker for absolute stability
+        return (a.ownerIndex or 0) < (b.ownerIndex or 0)
     end)
 
     FauxScrollFrame_Update(pane.scroll, #results, 10, 30)
@@ -517,15 +535,20 @@ function addon:SearchForUndercut(itemName)
 
         frame.isProcessing = true
         scanFrame:UnregisterAllEvents()
-        
         C_Timer.After(0.1, function()
             -- Analyze results
             local minBuyoutUnit = nil
+            local absoluteMinUnit = nil
             local ahAuctions = {}
             for i = 1, batchCount do
                 local name, texture, count, q, cu, l, lch, mb, mi, buyout, ba, hb, hbf, owner = GetAuctionItemInfo("list", i)
                 if name == itemName and buyout and buyout > 0 then
                     local unitPrice = buyout / count
+                    
+                    if not absoluteMinUnit or unitPrice < absoluteMinUnit then
+                        absoluteMinUnit = unitPrice
+                    end
+
                     local isMine = (owner == UnitName("player")) or (owner == "Unknown")
                     
                     if not isMine then
@@ -537,6 +560,11 @@ function addon:SearchForUndercut(itemName)
                 end
             end
             
+            -- Update database price with the absolute minimum found (including ours)
+            if absoluteMinUnit then
+                addon:UpdateItemPrice(itemName, absoluteMinUnit, 0)
+            end
+
             -- Apply results
             for _, auction in ipairs(self.undercutResults) do
                 if auction.name == itemName then
@@ -655,8 +683,6 @@ function addon:CancelUndercutAuction(auction)
             end
 
             -- AUCTION_OWNED_LIST_UPDATE
-            ResolveCancellation(false)
-            
             -- Re-fetch auctions from the server to get precise updated counts and indices
             -- Preserve current scan results so the user doesn't lose the "Undercut" status info
             addon:FetchPlayerAuctions(true)

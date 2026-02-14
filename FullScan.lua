@@ -110,8 +110,7 @@ function addon:StartFullScan()
             end
 
             if minPrice then
-                if addon.db.prices[itemName] ~= minPrice then
-                    addon.db.prices[itemName] = minPrice
+                if addon:UpdateItemPrice(itemName, minPrice, 0) then
                     updatedCount = updatedCount + 1
                 end
             end

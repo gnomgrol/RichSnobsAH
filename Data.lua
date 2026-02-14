@@ -99,6 +99,33 @@ function addon:GetItemPrice(itemName)
     return self.db.prices[itemName] or 0
 end
 
+function addon:UpdateItemPrice(itemName, unitPrice, pageNum)
+    if not itemName or not unitPrice or unitPrice <= 0 then return end
+    
+    local oldPrice = self.db.prices[itemName]
+    local updated = false
+
+    -- On page 0, we can safely overwrite because it's the start of a new scan/search.
+    -- On subsequent pages, we only update if the new unitPrice is LOWER than what we found on previous pages.
+    if pageNum == 0 then
+        if oldPrice ~= unitPrice then
+            self.db.prices[itemName] = unitPrice
+            updated = true
+        end
+    else
+        if oldPrice and unitPrice < oldPrice then
+            self.db.prices[itemName] = unitPrice
+            updated = true
+        end
+    end
+
+    if updated and self.mainFrame and self.mainFrame:IsShown() then
+        addon:RefreshMainFrame()
+    end
+    
+    return updated
+end
+
 function addon:CalculateCraftCost(itemData, visited)
     visited = visited or {}
     if not itemData or not itemData.reagents then return 0 end

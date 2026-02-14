@@ -495,6 +495,7 @@ end
 function addon:ProcessPostScanResults(itemName)
     local batchCount, totalCount = GetNumAuctionItems("list")
     local minBuyoutUnit = nil
+    local absoluteMinUnit = nil
     local minBidUnit = nil
     local results = {}
     local groupedMap = {}
@@ -508,6 +509,10 @@ function addon:ProcessPostScanResults(itemName)
             local unitPrice = buyout / count
             local unitBid = (bid or buyout) / count
             
+            if not absoluteMinUnit or unitPrice < absoluteMinUnit then
+                absoluteMinUnit = unitPrice
+            end
+
             -- Grouping key: price + bid + owner + stack size
             local ownerName = owner or "Unknown"
             local key = string.format("%.4f_%.4f_%s_%d", unitPrice, unitBid, ownerName, count)
@@ -537,6 +542,11 @@ function addon:ProcessPostScanResults(itemName)
                 end
             end
         end
+    end
+    
+    -- Update database price with the absolute minimum found (including ours)
+    if absoluteMinUnit then
+        addon:UpdateItemPrice(itemName, absoluteMinUnit, 0)
     end
     
     -- Sort results by unit price

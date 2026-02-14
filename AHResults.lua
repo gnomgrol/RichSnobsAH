@@ -924,28 +924,8 @@ function addon:ProcessAHResults()
     -- Update database price for the scanned item
     -- We use minUnitPrice which is the absolute minimum found so far on THIS page.
     -- To ensure we always have the market price, we update it if it's different.
-    -- FIX: Only update database if we are performing an EXACT search (e.g. from main frame or full scan)
-    if minUnitPrice and addon.ahCurrentSearchName and addon.ahCurrentSearchIsExact then
-        local oldPrice = addon.db.prices[addon.ahCurrentSearchName]
-        -- On page 0, we can safely overwrite because it's the start of a new scan.
-        -- On subsequent pages, we only update if the new minUnitPrice is LOWER than what we found on previous pages.
-        -- However, we want to allow prices to go UP between scans.
-        -- So: if it's page 0, we set it. If it's page > 0, we only set if lower.
-        if addon.ahCurrentPage == 0 then
-            if oldPrice ~= minUnitPrice then
-                addon.db.prices[addon.ahCurrentSearchName] = minUnitPrice
-                if addon.mainFrame and addon.mainFrame:IsShown() then
-                    addon:RefreshMainFrame()
-                end
-            end
-        else
-            if oldPrice and minUnitPrice < oldPrice then
-                addon.db.prices[addon.ahCurrentSearchName] = minUnitPrice
-                if addon.mainFrame and addon.mainFrame:IsShown() then
-                    addon:RefreshMainFrame()
-                end
-            end
-        end
+    if minUnitPrice and addon.ahCurrentSearchName then
+        addon:UpdateItemPrice(addon.ahCurrentSearchName, minUnitPrice, addon.ahCurrentPage)
     end
 
     -- TRIGGERING PURCHASE CHECK IS NOW REMOVED FROM HERE
