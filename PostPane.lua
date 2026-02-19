@@ -259,6 +259,10 @@ function addon:CreatePostPane(parentFrame)
     end)
     pane.combatFrame = combatFrame
 
+    pane:SetScript("OnShow", function()
+        addon:UpdateSelectNextButtonText()
+    end)
+
     addon.postPane = pane
 end
 
@@ -471,6 +475,7 @@ function addon:ScanForItemPrice(itemName)
         if self.postPane:IsShown() then
             self.postPane.scanStatus:SetText("Scan timed out.")
         end
+        self:UpdateSelectNextButtonText()
     end)
 
     scanFrame:SetScript("OnEvent", function(frame, event, arg1)
@@ -504,6 +509,7 @@ function addon:ScanForItemPrice(itemName)
 end
 
 function addon:ProcessPostScanResults(itemName)
+    if not self.isPostScan then return end
     local batchCount, totalCount = GetNumAuctionItems("list")
     local minBuyoutUnit = nil
     local absoluteMinUnit = nil
@@ -591,9 +597,8 @@ function addon:ProcessPostScanResults(itemName)
     self:RefreshPostAHList()
     self:UpdatePostButtonText()
     
-    self:UpdateSelectNextButtonText()
-    
     self.isPostScan = false
+    self:UpdateSelectNextButtonText()
 end
 
 -- Execute the preparation for posting (putting item in slot and setting prices)
@@ -747,4 +752,17 @@ function addon:PostNextFromList()
         self.print("No items from the current list found in your bags.")
         self:UpdateSelectNextButtonText()
     end
+end
+
+function addon:StopPostScan()
+    self.isPostScan = false
+    -- Cleanup any scan timers/frames if they were specific to Post scan
+    -- (The ScanForItemPrice uses a local scanFrame which is good, but we should make sure events are cleared)
+    if self.postPane and self.postPane.scanStatus then
+        local status = self.postPane.scanStatus:GetText()
+        if status == "Scanning for lowest price..." or status == "|cffff0000Throttled (Wait)|r" then
+             self.postPane.scanStatus:SetText("Scan aborted.")
+        end
+    end
+    self:UpdateSelectNextButtonText()
 end

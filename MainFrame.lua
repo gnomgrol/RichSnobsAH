@@ -59,6 +59,7 @@ function addon:CreateMainFrame()
             -- Cancel all active scans when AH closes
             if addon.EndUndercutScan then addon:EndUndercutScan() end
             if addon.StopNormalScan then addon:StopNormalScan() end
+            if addon.StopPostScan then addon:StopPostScan() end
         elseif event == "PLAYER_REGEN_DISABLED" then
             if frame:IsShown() then
                 addon:ToggleMainFrame()
@@ -878,10 +879,10 @@ function addon:RefreshMainFrame()
                 if isCraftable then
                     -- Craftable item: show bag count + craftable count and profit
                     local craftCount = addon:GetMaxCraftable(item)
-                    local cColor = craftCount > 0 and "|cff00ff00" or "|cffffffff"
+                    local cColor = craftCount > 0 and "|cffffff00" or "|cffffffff"
                     
                     row.countText:SetText(string.format("|cffaaaaaa[|r%sB:%d|r %sAH:%d|r|cffaaaaaa]|r", bColor, bagCount, aColor, ahCount))
-                    row.extraCountText:SetText(string.format("Craft: |cffaaaaaa|r%s[%d]|r|cffaaaaaa|r", cColor, craftCount))
+                    row.extraCountText:SetText(string.format("Craft: |cffaaaaaa[|r%s%d|r|cffaaaaaa]|r", cColor, craftCount))
                     row.extraCountText:Show()
 
                     local craftCost = addon:CalculateCraftCost(item)

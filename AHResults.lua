@@ -468,7 +468,7 @@ function addon:StopNormalScan()
     -- addon.ahCurrentSearchName = nil -- FIXED: Preserve this for purchase navigation!
     addon.ahIsBuying = false
     addon.ahIsScanning = false -- Ensure we stop processing events
-    addon.isPostScan = false
+    if addon.StopPostScan then addon:StopPostScan() end
     addon.isUndercutScan = false
 end
 
