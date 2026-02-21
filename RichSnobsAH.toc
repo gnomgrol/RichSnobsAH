@@ -1,8 +1,8 @@
-## Interface: 20504
+## Interface: 20505
 ## Title: RichSnobsAH
 ## Notes: Crafting and Auction House helper for groups and reagents.
-## Author: You
-## Version: 1.0
+## Author: Tove
+## Version: 1.1.6
 ## SavedVariables: RichSnobsAHDB
 
 Data.lua
