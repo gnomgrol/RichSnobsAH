@@ -14,6 +14,7 @@ function addon:InitializeData()
     self.db = RichSnobsAHDB
     if not self.db.prices then self.db.prices = {} end
     if not self.db.ahCounts then self.db.ahCounts = {} end
+    if not self.db.vendorItems then self.db.vendorItems = {} end
     if self.db.fastScan == nil then self.db.fastScan = false end
 end
 
@@ -98,6 +99,9 @@ function addon:DeleteItem(groupIndex, itemIndex)
 end
 
 function addon:GetItemPrice(itemName)
+    if self.db.vendorItems and self.db.vendorItems[itemName] then
+        return self.db.vendorItems[itemName]
+    end
     return self.db.prices[itemName] or 0
 end
 
@@ -228,11 +232,17 @@ function addon:GetAllTrackedItemNames(groupIndex)
         groupsToScan = self.db.groups
     end
 
+    local function addTrackedName(name)
+        if name and (not self.db.vendorItems or not self.db.vendorItems[name]) then
+            names[name] = true
+        end
+    end
+
     for _, group in ipairs(groupsToScan) do
         for _, item in ipairs(group.items) do
             -- Add recipe name (if present)
             if item.recipeName then
-                names[item.recipeName] = true
+                addTrackedName(item.recipeName)
             end
             -- Add item name from link (may differ from recipeName)
             if item.link then
@@ -240,17 +250,17 @@ function addon:GetAllTrackedItemNames(groupIndex)
                 if not itemName then
                     itemName = item.link:match("%[(.-)%]")
                 end
-                if itemName then names[itemName] = true end
+                addTrackedName(itemName)
             end
             
             -- Add all reagents
             if item.reagents then
                 for _, reagent in ipairs(item.reagents) do
                     if reagent.name then
-                        names[reagent.name] = true
+                        addTrackedName(reagent.name)
                     elseif reagent.link then
                         local rName = GetItemInfo(reagent.link) or reagent.link:match("%[(.-)%]")
-                        if rName then names[rName] = true end
+                        addTrackedName(rName)
                     end
                 end
             end

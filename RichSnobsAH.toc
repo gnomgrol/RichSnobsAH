@@ -11,6 +11,8 @@ AHResults.lua
 PostPane.lua
 UndercutPane.lua
 AddItemPane.lua
+VendorScan.lua
+VendorItemsPane.lua
 MainAHPanel.lua
 FullScan.lua
 Hooks.lua

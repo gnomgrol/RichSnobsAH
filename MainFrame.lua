@@ -346,7 +346,7 @@ function addon:CreateMainFrame()
     -- Import Selection Button
     local importBtn = CreateFrame("Button", nil, frame, "GameMenuButtonTemplate")
     importBtn:SetPoint("BOTTOMLEFT", itemFrame, "BOTTOMLEFT", 0, -25)
-    importBtn:SetWidth(120)
+    importBtn:SetWidth(100)
     importBtn:SetHeight(20)
     importBtn:SetNormalFontObject("GameFontNormalSmall")
     importBtn:SetHighlightFontObject("GameFontHighlightSmall")
@@ -360,11 +360,27 @@ function addon:CreateMainFrame()
     -- Add Item Button (for arbitrary non-craftable items)
     local addItemBtn = CreateFrame("Button", nil, frame, "GameMenuButtonTemplate")
     addItemBtn:SetPoint("LEFT", importBtn, "RIGHT", 5, 0)
-    addItemBtn:SetWidth(80)
+    addItemBtn:SetWidth(70)
     addItemBtn:SetHeight(20)
     addItemBtn:SetNormalFontObject("GameFontNormalSmall")
     addItemBtn:SetHighlightFontObject("GameFontHighlightSmall")
     addItemBtn:SetText("Add Item")
+
+    -- Vendor Items Toggle Button
+    local vendorBtn = CreateFrame("Button", nil, frame, "GameMenuButtonTemplate")
+    vendorBtn:SetPoint("LEFT", addItemBtn, "RIGHT", 5, 0)
+    vendorBtn:SetWidth(95)
+    vendorBtn:SetHeight(20)
+    vendorBtn:SetNormalFontObject("GameFontNormalSmall")
+    vendorBtn:SetHighlightFontObject("GameFontHighlightSmall")
+    vendorBtn:SetText("Vendor Items")
+    vendorBtn:SetScript("OnClick", function()
+        if addon.ToggleVendorItemsPopout then
+            addon:ToggleVendorItemsPopout()
+        end
+    end)
+    frame.vendorBtn = vendorBtn
+    addon.vendorBtn = vendorBtn
 
     -- Helper: add an item link directly to the current group
     function addon:AddItemFromLink(link)
@@ -414,7 +430,7 @@ function addon:CreateMainFrame()
     -- Full Scan Button
     local fullScanBtn = CreateFrame("Button", nil, frame, "GameMenuButtonTemplate")
     fullScanBtn:SetPoint("BOTTOMRIGHT", itemFrame, "BOTTOMRIGHT", 0, -25)
-    fullScanBtn:SetWidth(160)
+    fullScanBtn:SetWidth(120)
     fullScanBtn:SetHeight(20)
     fullScanBtn:SetNormalFontObject("GameFontNormalSmall")
     fullScanBtn:SetHighlightFontObject("GameFontHighlightSmall")
@@ -936,7 +952,16 @@ function addon:RefreshMainFrame()
                     end
                 end
 
-                row.name:SetText(item.link or "Unknown Item")
+                if item.link then
+                    local itemName = GetItemInfo(item.link) or item.link:match("%[(.-)%]")
+                    if itemName and addon.db.vendorItems and addon.db.vendorItems[itemName] then
+                        row.name:SetText(item.link:gsub("|cff%x%x%x%x%x%x", "|cffffff00"))
+                    else
+                        row.name:SetText(item.link)
+                    end
+                else
+                    row.name:SetText("Unknown Item")
+                end
                 row.icon:SetTexture(item.texture or "Interface\\Icons\\Inv_Misc_QuestionMark")
                 -- Enable/Disable Post button based on AH state
                 if addon:IsAHOpen() then
@@ -1030,7 +1055,15 @@ function addon:RefreshMainFrame()
                            color = "|cff00ff00" -- Green
                        end
                        
-                       lineObj.text:SetText((rData.count or 1) .. "x " .. (rData.link or "Reagent") .. " " .. color .. owned .. "|r")
+                       local reagentLink = rData.link or "Reagent"
+                       if reagentLink ~= "Reagent" then
+                           local itemName = GetItemInfo(reagentLink) or reagentLink:match("%[(.-)%]")
+                           if itemName and addon.db.vendorItems and addon.db.vendorItems[itemName] then
+                               reagentLink = reagentLink:gsub("|cff%x%x%x%x%x%x", "|cffffff00")
+                           end
+                       end
+                       
+                       lineObj.text:SetText((rData.count or 1) .. "x " .. reagentLink .. " " .. color .. owned .. "|r")
                       
                        local rPrice = addon:GetItemPrice(rData.name)
                        if rPrice > 0 then
