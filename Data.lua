@@ -183,8 +183,9 @@ function addon:CalculateCraftCost(itemData, visited)
             local craftCost = self:CalculateCraftCost(craftableItem, visited)
             -- Prefer craft cost if available and cheaper than AH, OR if AH price is unknown
             if craftCost > 0 then
-                if rCost == 0 or craftCost < rCost then
-                    rCost = craftCost
+                local unitCraftCost = craftCost / (craftableItem.yield or 1)
+                if rCost == 0 or unitCraftCost < rCost then
+                    rCost = unitCraftCost
                 end
             end
         end

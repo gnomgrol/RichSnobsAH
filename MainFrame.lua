@@ -606,6 +606,11 @@ function addon:CreateMainFrame()
         iconBtn.texture = icon
         row.icon = icon -- keep reference for Refresh
         
+        local yieldText = iconBtn:CreateFontString(nil, "OVERLAY", "NumberFontNormal")
+        yieldText:SetPoint("BOTTOMRIGHT", iconBtn, "BOTTOMRIGHT", -2, 2)
+        yieldText:SetJustifyH("RIGHT")
+        row.yieldText = yieldText
+        
         iconBtn:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square")
         iconBtn:GetHighlightTexture():SetBlendMode("ADD")
         
@@ -919,12 +924,15 @@ function addon:RefreshMainFrame()
                         sellPrice = addon:GetItemPrice(item.link)
                     end
 
-                    local profit = (sellPrice or 0) - craftCost
+                    local yield = item.yield or 1
+                    local unitCraftCost = craftCost / yield
+                    local ahCutMultiplier = 0.95 -- 5% AH Cut
+                    local profit = ((sellPrice or 0) * ahCutMultiplier) - unitCraftCost
                     if craftCost > 0 and sellPrice > 0 then
                         local color = (profit > 0) and "|cff00ff00" or "|cffff0000"
                         row.profitText:SetText(color .. "P: " .. addon:FormatMoney(profit, true) .. "|r")
                     elseif craftCost > 0 then
-                        row.profitText:SetText("|cffccccccC: " .. addon:FormatMoney(craftCost, true) .. "|r")
+                        row.profitText:SetText("|cffccccccC: " .. addon:FormatMoney(unitCraftCost, true) .. "|r")
                     else
                         row.profitText:SetText("")
                     end
@@ -963,6 +971,14 @@ function addon:RefreshMainFrame()
                     row.name:SetText("Unknown Item")
                 end
                 row.icon:SetTexture(item.texture or "Interface\\Icons\\Inv_Misc_QuestionMark")
+                
+                if item.yield and item.yield > 1 then
+                    row.yieldText:SetText(item.yield)
+                    row.yieldText:Show()
+                else
+                    row.yieldText:Hide()
+                end
+                
                 -- Enable/Disable Post button based on AH state
                 if addon:IsAHOpen() then
                     row.postItemBtn:Enable()

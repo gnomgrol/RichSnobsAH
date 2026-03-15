@@ -11,6 +11,14 @@ local function AddTradeSkillItem(id)
         -- Capture Profession Name
         local professionName, _, _, _ = GetTradeSkillLine()
         
+        local minMade, maxMade = GetTradeSkillNumMade(id)
+        local yield = 1
+        if minMade and maxMade then
+            yield = (minMade + maxMade) / 2
+        elseif minMade then
+            yield = minMade
+        end
+        
         local reagents = {}
         for i = 1, numReagents do
             local rName, rTexture, rCount, _ = GetTradeSkillReagentInfo(id, i)
@@ -30,7 +38,8 @@ local function AddTradeSkillItem(id)
             reagents = reagents,
             recipeName = name,
             profession = professionName,
-            isCraft = false -- distinguish between TradeSkill vs Craft (Enchanting)
+            isCraft = false, -- distinguish between TradeSkill vs Craft (Enchanting)
+            yield = yield
         })
     end
 end
@@ -66,7 +75,8 @@ local function AddCraftItem(id)
             reagents = reagents,
             recipeName = name,
             profession = professionName,
-            isCraft = true
+            isCraft = true,
+            yield = 1
         })
     end
 end
