@@ -1,16 +1,16 @@
 local addonName, addon = ...
 
 -- Helper to add item by ID from TradeSkill API
-local function AddTradeSkillItem(id) 
-    local name, type, _, _, _ = GetTradeSkillInfo(id)
-    if type ~= "header" then
+local function AddTradeSkillItem(id)
+    local name, skillType, _, _, _ = GetTradeSkillInfo(id)
+    if skillType ~= "header" then
         local link = GetTradeSkillItemLink(id)
         local icon = GetTradeSkillIcon(id)
         local numReagents = GetTradeSkillNumReagents(id)
-        
+
         -- Capture Profession Name
         local professionName, _, _, _ = GetTradeSkillLine()
-        
+
         local minMade, maxMade = GetTradeSkillNumMade(id)
         local yield = 1
         if minMade and maxMade then
@@ -18,7 +18,7 @@ local function AddTradeSkillItem(id)
         elseif minMade then
             yield = minMade
         end
-        
+
         local reagents = {}
         for i = 1, numReagents do
             local rName, rTexture, rCount, _ = GetTradeSkillReagentInfo(id, i)
@@ -30,7 +30,7 @@ local function AddTradeSkillItem(id)
                 link = rLink
             })
         end
-        
+
         addon:AddItemToGroup(addon.db.selectedGroupIndex, {
             link = link,
             texture = icon,
@@ -39,23 +39,24 @@ local function AddTradeSkillItem(id)
             recipeName = name,
             profession = professionName,
             isCraft = false, -- distinguish between TradeSkill vs Craft (Enchanting)
-            yield = yield
+            yield = yield,
+            difficulty = skillType, -- "optimal"/"medium"/"easy"/"trivial"
         })
     end
 end
 
 -- Helper to add item by ID from Craft API (Enchanting)
 local function AddCraftItem(id)
-    local name, _, type = GetCraftInfo(id)
-    if type ~= "header" then
+    local name, _, skillType = GetCraftInfo(id)
+    if skillType ~= "header" then
         local link = GetCraftItemLink(id)
         if not link then link = name end
         local icon = GetCraftIcon(id)
         local numReagents = GetCraftNumReagents(id)
-        
+
         local professionName = "Enchanting" -- Usually CraftFrame is Enchanting in Classic/TBC
         -- GetCraftDisplaySkillLine() might return it?
-        
+
         local reagents = {}
         for i = 1, numReagents do
             local rName, rTexture, rCount, _ = GetCraftReagentInfo(id, i)
@@ -67,7 +68,7 @@ local function AddCraftItem(id)
                 link = rLink
             })
         end
-            
+
         addon:AddItemToGroup(addon.db.selectedGroupIndex, {
             link = link,
             texture = icon,
@@ -76,7 +77,8 @@ local function AddCraftItem(id)
             recipeName = name,
             profession = professionName,
             isCraft = true,
-            yield = 1
+            yield = 1,
+            difficulty = skillType, -- "optimal"/"medium"/"easy"/"trivial"
         })
     end
 end

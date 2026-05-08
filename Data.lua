@@ -16,6 +16,94 @@ function addon:InitializeData()
     if not self.db.ahCounts then self.db.ahCounts = {} end
     if not self.db.vendorItems then self.db.vendorItems = {} end
     if self.db.fastScan == nil then self.db.fastScan = false end
+    if not self.db.viewMode then self.db.viewMode = "profit" end -- "profit" or "leveling"
+end
+
+-- Skill-up chance per craft for vanilla/TBC profession leveling.
+-- Standard accepted model: orange=100%, yellow=75%, green=25%, grey=0%.
+function addon:GetSkillUpChance(difficulty)
+    if difficulty == "optimal" then return 1.0 end
+    if difficulty == "medium" or difficulty == "difficult" then return 0.75 end
+    if difficulty == "easy" then return 0.25 end
+    return 0 -- "trivial" or unknown
+end
+
+function addon:GetDifficultyColor(difficulty)
+    if difficulty == "optimal" then return "|cffff8040" end -- orange
+    if difficulty == "medium" or difficulty == "difficult" then return "|cffffff00" end -- yellow
+    if difficulty == "easy" then return "|cff40c040" end -- green
+    if difficulty == "trivial" then return "|cff808080" end -- grey
+    return "|cffaaaaaa" -- unknown
+end
+
+function addon:GetDifficultyLabel(difficulty)
+    if difficulty == "optimal" then return "Orange" end
+    if difficulty == "medium" or difficulty == "difficult" then return "Yellow" end
+    if difficulty == "easy" then return "Green" end
+    if difficulty == "trivial" then return "Grey" end
+    return "?"
+end
+
+-- Expected craft cost per single skill point (copper). Returns nil if not skillable
+-- (no reagents, grey/unknown difficulty, or no price data).
+function addon:GetCostPerSkillUp(item)
+    if not item or not item.reagents or #item.reagents == 0 then return nil end
+    local chance = self:GetSkillUpChance(item.difficulty)
+    if not chance or chance <= 0 then return nil end
+    local craftCost = self:CalculateCraftCost(item)
+    if not craftCost or craftCost <= 0 then return nil end
+    return craftCost / chance
+end
+
+-- Update difficulty for any tracked items matching recipes in the currently
+-- open profession window. Called when TradeSkill/Craft windows show or update.
+function addon:UpdateRecipeDifficulties()
+    if not self.db or not self.db.groups then return end
+    local updates = {} -- [profession][recipeName] = skillType
+
+    if TradeSkillFrame and TradeSkillFrame:IsVisible() then
+        local profName = GetTradeSkillLine()
+        if profName then
+            updates[profName] = updates[profName] or {}
+            local num = GetNumTradeSkills() or 0
+            for i = 1, num do
+                local name, skillType = GetTradeSkillInfo(i)
+                if name and skillType and skillType ~= "header" then
+                    updates[profName][name] = skillType
+                end
+            end
+        end
+    end
+
+    if CraftFrame and CraftFrame:IsVisible() and GetNumCrafts then
+        local profName = (GetCraftDisplaySkillLine and GetCraftDisplaySkillLine()) or "Enchanting"
+        updates[profName] = updates[profName] or {}
+        local num = GetNumCrafts() or 0
+        for i = 1, num do
+            local name, _, skillType = GetCraftInfo(i)
+            if name and skillType and skillType ~= "header" then
+                updates[profName][name] = skillType
+            end
+        end
+    end
+
+    local changed = false
+    for _, group in ipairs(self.db.groups) do
+        for _, item in ipairs(group.items) do
+            local prof = item.profession
+            if prof and updates[prof] and item.recipeName then
+                local newDiff = updates[prof][item.recipeName]
+                if newDiff and newDiff ~= item.difficulty then
+                    item.difficulty = newDiff
+                    changed = true
+                end
+            end
+        end
+    end
+
+    if changed and self.mainFrame and self.mainFrame:IsShown() then
+        self:RefreshMainFrame()
+    end
 end
 
 function addon:AddGroup(groupName)

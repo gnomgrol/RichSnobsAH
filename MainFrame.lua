@@ -36,6 +36,8 @@ function addon:CreateMainFrame()
     frame:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
     frame:RegisterEvent("TRADE_SKILL_UPDATE")
     frame:RegisterEvent("CRAFT_UPDATE")
+    pcall(function() frame:RegisterEvent("TRADE_SKILL_SHOW") end)
+    pcall(function() frame:RegisterEvent("CRAFT_SHOW") end)
     
     -- AH Events (Safe registration)
     frame:RegisterEvent("AUCTION_HOUSE_SHOW")
@@ -64,8 +66,14 @@ function addon:CreateMainFrame()
             if frame:IsShown() then
                 addon:ToggleMainFrame()
             end
+        elseif event == "TRADE_SKILL_SHOW" or event == "TRADE_SKILL_UPDATE"
+            or event == "CRAFT_SHOW" or event == "CRAFT_UPDATE" then
+            -- Refresh recipe difficulty colors against the open profession
+            C_Timer.After(0.05, function()
+                if addon.UpdateRecipeDifficulties then addon:UpdateRecipeDifficulties() end
+            end)
         end
-        
+
         if self:IsShown() then
             -- Small delay ensures the game has finished updating internal state (item counts, etc)
             C_Timer.After(0.1, function()
@@ -82,6 +90,44 @@ function addon:CreateMainFrame()
     closeBtn:SetScript("OnClick", function()
         addon:ToggleMainFrame()
     end)
+
+    -- View Mode Toggle (Profit / Leveling)
+    local viewModeBtn = CreateFrame("Button", nil, frame, "GameMenuButtonTemplate")
+    viewModeBtn:SetPoint("TOPRIGHT", closeBtn, "TOPLEFT", -2, -2)
+    viewModeBtn:SetWidth(110)
+    viewModeBtn:SetHeight(18)
+    viewModeBtn:SetNormalFontObject("GameFontNormalSmall")
+    viewModeBtn:SetHighlightFontObject("GameFontHighlightSmall")
+    viewModeBtn:SetScript("OnClick", function()
+        if addon.db.viewMode == "leveling" then
+            addon.db.viewMode = "profit"
+        else
+            addon.db.viewMode = "leveling"
+        end
+        addon:UpdateViewModeButton()
+        addon:RefreshMainFrame()
+    end)
+    viewModeBtn:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_BOTTOMLEFT")
+        GameTooltip:AddLine("Toggle View Mode")
+        GameTooltip:AddLine("Profit: profit per craft (selling)", 1, 1, 1)
+        GameTooltip:AddLine("Leveling: expected cost per skill point", 1, 1, 1)
+        GameTooltip:AddLine(" ")
+        GameTooltip:AddLine("|cffff8040Orange|r 100%, |cffffff00Yellow|r 75%, |cff40c040Green|r 25%, |cff808080Grey|r 0%")
+        GameTooltip:AddLine("Open your profession window to refresh recipe colors.", 0.7, 0.7, 0.7, true)
+        GameTooltip:Show()
+    end)
+    viewModeBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    frame.viewModeBtn = viewModeBtn
+
+    function addon:UpdateViewModeButton()
+        if not self.mainFrame or not self.mainFrame.viewModeBtn then return end
+        if self.db.viewMode == "leveling" then
+            self.mainFrame.viewModeBtn:SetText("View: |cff40c0ffLeveling|r")
+        else
+            self.mainFrame.viewModeBtn:SetText("View: |cffffd700Profit|r")
+        end
+    end
     
     -- Title
     local title = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
@@ -838,15 +884,40 @@ function addon:RefreshMainFrame()
         if self.mainFrame.fullScanBtn then self.mainFrame.fullScanBtn:Disable() end
     end
 
+    -- Keep the view-mode toggle text in sync with state
+    if self.UpdateViewModeButton then self:UpdateViewModeButton() end
+
     -- Refresh Items
     if not self.db.selectedGroupIndex or not groups[self.db.selectedGroupIndex] then
         -- Clear items if no group selected
         for _, row in ipairs(self.itemRows) do row:Hide() end
-        return 
+        return
     end
-    
+
     local items = groups[self.db.selectedGroupIndex].items or {}
-    
+    local levelingMode = (self.db.viewMode == "leveling")
+
+    -- Build display order: in leveling mode, sort by expected cost-per-skill-point ascending,
+    -- pushing items with no skill-up potential (grey/unknown/missing prices) to the bottom.
+    local renderOrder = {}
+    for i = 1, #items do renderOrder[i] = i end
+    if levelingMode then
+        local costCache = {}
+        for i, it in ipairs(items) do
+            costCache[i] = self:GetCostPerSkillUp(it)
+        end
+        table.sort(renderOrder, function(a, b)
+            local ca, cb = costCache[a], costCache[b]
+            if ca and cb then
+                if ca ~= cb then return ca < cb end
+                return a < b
+            end
+            if ca then return true end
+            if cb then return false end
+            return a < b
+        end)
+    end
+
     -- Calculate total height for scrolling
     local totalHeight = 0
     local itemHeights = {}
@@ -872,7 +943,9 @@ function addon:RefreshMainFrame()
     local prevRow = nil
     local rowIdx = 1
 
-    for i, item in ipairs(items) do
+    for displayPos = 1, #renderOrder do
+        local i = renderOrder[displayPos]
+        local item = items[i]
         local h = itemHeights[i]
         
         -- Check if this item should be visible
@@ -898,65 +971,94 @@ function addon:RefreshMainFrame()
                 local aColor = ahCount > 0 and "|cff00ff00" or "|cffffffff"
 
                 if isCraftable then
-                    -- Craftable item: show bag count + craftable count and profit
+                    -- Craftable item: show bag count + craftable count
                     local craftCount = addon:GetMaxCraftable(item)
                     local cColor = craftCount > 0 and "|cffffff00" or "|cffffffff"
-                    
+
                     row.countText:SetText(string.format("|cffaaaaaa[|r%sB:%d|r %sAH:%d|r|cffaaaaaa]|r", bColor, bagCount, aColor, ahCount))
                     row.extraCountText:SetText(string.format("Craft: |cffaaaaaa[|r%s%d|r|cffaaaaaa]|r", cColor, craftCount))
                     row.extraCountText:Show()
 
                     local craftCost = addon:CalculateCraftCost(item)
-                    local sellPrice = addon:GetItemPrice(item.recipeName)
-                    if (not sellPrice or sellPrice == 0) and item.link then
-                        local itemName = GetItemInfo(item.link)
-                        if itemName then
-                            sellPrice = addon:GetItemPrice(itemName)
-                        end
-                    end
-                    if (not sellPrice or sellPrice == 0) and item.link then
-                        local rawName = item.link:match("%[(.-)%]")
-                        if rawName then
-                            sellPrice = addon:GetItemPrice(rawName)
-                        end
-                    end
-                    if (not sellPrice or sellPrice == 0) and item.link then
-                        sellPrice = addon:GetItemPrice(item.link)
-                    end
 
-                    local yield = item.yield or 1
-                    local unitCraftCost = craftCost / yield
-                    local ahCutMultiplier = 0.95 -- 5% AH Cut
-                    local profit = ((sellPrice or 0) * ahCutMultiplier) - unitCraftCost
-                    if craftCost > 0 and sellPrice > 0 then
-                        local color = (profit > 0) and "|cff00ff00" or "|cffff0000"
-                        row.profitText:SetText(color .. "P: " .. addon:FormatMoney(profit, true) .. "|r")
-                    elseif craftCost > 0 then
-                        row.profitText:SetText("|cffccccccC: " .. addon:FormatMoney(unitCraftCost, true) .. "|r")
+                    if levelingMode then
+                        -- Leveling mode: show difficulty + expected cost per skill-up
+                        local diff = item.difficulty
+                        local diffColor = addon:GetDifficultyColor(diff)
+                        local diffLabel = addon:GetDifficultyLabel(diff)
+                        local chance = addon:GetSkillUpChance(diff)
+
+                        if chance > 0 and craftCost > 0 then
+                            local costPerSP = craftCost / chance
+                            row.profitText:SetText(string.format("%s%s|r |cffcccccc%s|r |cffaaaaaa->|r |cff80ffc0%s/SP|r",
+                                diffColor, diffLabel,
+                                addon:FormatMoney(craftCost, true),
+                                addon:FormatMoney(costPerSP, true)))
+                        elseif chance > 0 then
+                            row.profitText:SetText(string.format("%s%s|r |cffaaaaaa(no price data)|r", diffColor, diffLabel))
+                        elseif diff == "trivial" then
+                            row.profitText:SetText(string.format("%s%s|r |cff888888no skill-up|r", diffColor, diffLabel))
+                        else
+                            row.profitText:SetText("|cffaaaaaaopen profession to detect color|r")
+                        end
                     else
-                        row.profitText:SetText("")
+                        -- Profit mode: profit per craft after AH cut
+                        local sellPrice = addon:GetItemPrice(item.recipeName)
+                        if (not sellPrice or sellPrice == 0) and item.link then
+                            local itemName = GetItemInfo(item.link)
+                            if itemName then
+                                sellPrice = addon:GetItemPrice(itemName)
+                            end
+                        end
+                        if (not sellPrice or sellPrice == 0) and item.link then
+                            local rawName = item.link:match("%[(.-)%]")
+                            if rawName then
+                                sellPrice = addon:GetItemPrice(rawName)
+                            end
+                        end
+                        if (not sellPrice or sellPrice == 0) and item.link then
+                            sellPrice = addon:GetItemPrice(item.link)
+                        end
+
+                        local yield = item.yield or 1
+                        local unitCraftCost = craftCost / yield
+                        local ahCutMultiplier = 0.95 -- 5% AH Cut
+                        local profit = ((sellPrice or 0) * ahCutMultiplier) - unitCraftCost
+                        if craftCost > 0 and sellPrice > 0 then
+                            local color = (profit > 0) and "|cff00ff00" or "|cffff0000"
+                            row.profitText:SetText(color .. "P: " .. addon:FormatMoney(profit, true) .. "|r")
+                        elseif craftCost > 0 then
+                            row.profitText:SetText("|cffccccccC: " .. addon:FormatMoney(unitCraftCost, true) .. "|r")
+                        else
+                            row.profitText:SetText("")
+                        end
                     end
                 else
                     -- Non-craftable item: show bag count and AH price
                     row.countText:SetText(string.format("|cffaaaaaa[|r%sB:%d|r %sAH:%d|r|cffaaaaaa]|r", bColor, bagCount, aColor, ahCount))
                     row.extraCountText:Hide()
 
-                    -- Show AH price
-                    local ahPrice = 0
-                    if item.link then
-                        local itemName = GetItemInfo(item.link)
-                        if itemName then
-                            ahPrice = addon:GetItemPrice(itemName)
-                        end
-                        if ahPrice == 0 then
-                            local rawName = item.link:match("%[(.-)%]")
-                            if rawName then ahPrice = addon:GetItemPrice(rawName) end
-                        end
-                    end
-                    if ahPrice > 0 then
-                        row.profitText:SetText("|cffffcc00" .. addon:FormatMoney(ahPrice, true) .. "|r")
-                    else
+                    if levelingMode then
+                        -- Reagents and other non-craftables don't apply to skill-up calculations
                         row.profitText:SetText("")
+                    else
+                        -- Show AH price
+                        local ahPrice = 0
+                        if item.link then
+                            local itemName = GetItemInfo(item.link)
+                            if itemName then
+                                ahPrice = addon:GetItemPrice(itemName)
+                            end
+                            if ahPrice == 0 then
+                                local rawName = item.link:match("%[(.-)%]")
+                                if rawName then ahPrice = addon:GetItemPrice(rawName) end
+                            end
+                        end
+                        if ahPrice > 0 then
+                            row.profitText:SetText("|cffffcc00" .. addon:FormatMoney(ahPrice, true) .. "|r")
+                        else
+                            row.profitText:SetText("")
+                        end
                     end
                 end
 
@@ -986,17 +1088,17 @@ function addon:RefreshMainFrame()
                     row.postItemBtn:Disable()
                 end
                 
-                -- Update item move buttons
+                -- Update item move buttons (disabled in leveling mode since list is auto-sorted)
                 local numItems = #items
-                if i > 1 then
+                if not levelingMode and i > 1 then
                     row.moveItemUpBtn:Enable()
                     row.moveItemUpBtn:GetNormalTexture():SetDesaturated(false)
                 else
                     row.moveItemUpBtn:Disable()
                     row.moveItemUpBtn:GetNormalTexture():SetDesaturated(true)
                 end
-                
-                if i < numItems then
+
+                if not levelingMode and i < numItems then
                     row.moveItemDownBtn:Enable()
                     row.moveItemDownBtn:GetNormalTexture():SetDesaturated(false)
                 else
