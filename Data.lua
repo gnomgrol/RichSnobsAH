@@ -44,15 +44,81 @@ function addon:GetDifficultyLabel(difficulty)
     return "?"
 end
 
+-- Vendor sell price per single crafted item. Lazy-fetches and caches on the
+-- item if it wasn't captured at import time (e.g. recipes added pre-feature).
+function addon:GetVendorSellPrice(item)
+    if not item then return 0 end
+    if item.sellPrice and item.sellPrice > 0 then return item.sellPrice end
+    if item.link then
+        local sp = select(11, GetItemInfo(item.link))
+        if sp and sp > 0 then
+            item.sellPrice = sp -- cache on the item; SavedVariables will persist it
+            return sp
+        end
+    end
+    return 0
+end
+
+-- Best known AH price for the crafted item (per single item, gross).
+function addon:GetCraftedAHPrice(item)
+    if not item then return 0 end
+    local p = self:GetItemPrice(item.recipeName)
+    if (not p or p == 0) and item.link then
+        local n = GetItemInfo(item.link)
+        if n then p = self:GetItemPrice(n) end
+    end
+    if (not p or p == 0) and item.link then
+        local raw = item.link:match("%[(.-)%]")
+        if raw then p = self:GetItemPrice(raw) end
+    end
+    if (not p or p == 0) and item.link then
+        p = self:GetItemPrice(item.link)
+    end
+    return p or 0
+end
+
+local AH_CUT = 0.95 -- 5% AH cut taken off the listed price when sold
+
 -- Expected craft cost per single skill point (copper). Returns nil if not skillable
--- (no reagents, grey/unknown difficulty, or no price data).
-function addon:GetCostPerSkillUp(item)
+-- (no reagents, grey/unknown difficulty, or no reagent price data).
+--
+-- mode controls whether the recoup from disposing of the crafted items is
+-- credited against the cost:
+--   "gross"  -- raw craft cost / chance (no recoup)
+--   "vendor" -- subtract vendor sell value of the yielded items
+--   "ah"     -- subtract AH sell value (after cut) of the yielded items.
+--             Returns nil when no AH price is known.
+--   "best"   -- min of vendor and AH (whichever is known). Default.
+function addon:GetCostPerSkillUp(item, mode)
     if not item or not item.reagents or #item.reagents == 0 then return nil end
     local chance = self:GetSkillUpChance(item.difficulty)
     if not chance or chance <= 0 then return nil end
     local craftCost = self:CalculateCraftCost(item)
     if not craftCost or craftCost <= 0 then return nil end
-    return craftCost / chance
+
+    local yield = item.yield or 1
+    mode = mode or "best"
+
+    if mode == "gross" then
+        return craftCost / chance
+    end
+
+    local vendorRecoup = self:GetVendorSellPrice(item) * yield
+    local vendorPerSP = (craftCost - vendorRecoup) / chance
+
+    if mode == "vendor" then return vendorPerSP end
+
+    local ahRaw = self:GetCraftedAHPrice(item)
+    local ahPerSP = nil
+    if ahRaw and ahRaw > 0 then
+        ahPerSP = (craftCost - ahRaw * AH_CUT * yield) / chance
+    end
+
+    if mode == "ah" then return ahPerSP end
+
+    -- "best": cheapest disposal strategy
+    if ahPerSP and ahPerSP < vendorPerSP then return ahPerSP end
+    return vendorPerSP
 end
 
 -- Update difficulty for any tracked items matching recipes in the currently

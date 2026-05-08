@@ -982,18 +982,22 @@ function addon:RefreshMainFrame()
                     local craftCost = addon:CalculateCraftCost(item)
 
                     if levelingMode then
-                        -- Leveling mode: show difficulty + expected cost per skill-up
+                        -- Leveling mode: show difficulty + cost-per-SP for both vendor and AH disposal
                         local diff = item.difficulty
                         local diffColor = addon:GetDifficultyColor(diff)
                         local diffLabel = addon:GetDifficultyLabel(diff)
                         local chance = addon:GetSkillUpChance(diff)
 
                         if chance > 0 and craftCost > 0 then
-                            local costPerSP = craftCost / chance
-                            row.profitText:SetText(string.format("%s%s|r |cffcccccc%s|r |cffaaaaaa->|r |cff80ffc0%s/SP|r",
-                                diffColor, diffLabel,
-                                addon:FormatMoney(craftCost, true),
-                                addon:FormatMoney(costPerSP, true)))
+                            local vCost = addon:GetCostPerSkillUp(item, "vendor")
+                            local aCost = addon:GetCostPerSkillUp(item, "ah")
+                            local function fmt(c)
+                                if not c then return "|cff888888-|r" end
+                                local color = (c < 0) and "|cff00ff80" or "|cffffffff"
+                                return color .. addon:FormatMoney(c, true) .. "|r"
+                            end
+                            row.profitText:SetText(string.format("%s%s|r |cffccccccV/SP:|r %s  |cffccccccAH/SP:|r %s",
+                                diffColor, diffLabel, fmt(vCost), fmt(aCost)))
                         elseif chance > 0 then
                             row.profitText:SetText(string.format("%s%s|r |cffaaaaaa(no price data)|r", diffColor, diffLabel))
                         elseif diff == "trivial" then
@@ -1003,27 +1007,11 @@ function addon:RefreshMainFrame()
                         end
                     else
                         -- Profit mode: profit per craft after AH cut
-                        local sellPrice = addon:GetItemPrice(item.recipeName)
-                        if (not sellPrice or sellPrice == 0) and item.link then
-                            local itemName = GetItemInfo(item.link)
-                            if itemName then
-                                sellPrice = addon:GetItemPrice(itemName)
-                            end
-                        end
-                        if (not sellPrice or sellPrice == 0) and item.link then
-                            local rawName = item.link:match("%[(.-)%]")
-                            if rawName then
-                                sellPrice = addon:GetItemPrice(rawName)
-                            end
-                        end
-                        if (not sellPrice or sellPrice == 0) and item.link then
-                            sellPrice = addon:GetItemPrice(item.link)
-                        end
-
+                        local sellPrice = addon:GetCraftedAHPrice(item)
                         local yield = item.yield or 1
                         local unitCraftCost = craftCost / yield
                         local ahCutMultiplier = 0.95 -- 5% AH Cut
-                        local profit = ((sellPrice or 0) * ahCutMultiplier) - unitCraftCost
+                        local profit = (sellPrice * ahCutMultiplier) - unitCraftCost
                         if craftCost > 0 and sellPrice > 0 then
                             local color = (profit > 0) and "|cff00ff00" or "|cffff0000"
                             row.profitText:SetText(color .. "P: " .. addon:FormatMoney(profit, true) .. "|r")

@@ -31,6 +31,11 @@ local function AddTradeSkillItem(id)
             })
         end
 
+        local vendorSell = 0
+        if link then
+            vendorSell = select(11, GetItemInfo(link)) or 0
+        end
+
         addon:AddItemToGroup(addon.db.selectedGroupIndex, {
             link = link,
             texture = icon,
@@ -41,6 +46,7 @@ local function AddTradeSkillItem(id)
             isCraft = false, -- distinguish between TradeSkill vs Craft (Enchanting)
             yield = yield,
             difficulty = skillType, -- "optimal"/"medium"/"easy"/"trivial"
+            sellPrice = vendorSell, -- vendor sell price per single crafted item
         })
     end
 end
@@ -69,6 +75,11 @@ local function AddCraftItem(id)
             })
         end
 
+        local vendorSell = 0
+        if link then
+            vendorSell = select(11, GetItemInfo(link)) or 0
+        end
+
         addon:AddItemToGroup(addon.db.selectedGroupIndex, {
             link = link,
             texture = icon,
@@ -79,6 +90,7 @@ local function AddCraftItem(id)
             isCraft = true,
             yield = 1,
             difficulty = skillType, -- "optimal"/"medium"/"easy"/"trivial"
+            sellPrice = vendorSell, -- vendor sell price per single crafted item
         })
     end
 end
