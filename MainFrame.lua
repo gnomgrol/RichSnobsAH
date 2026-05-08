@@ -134,6 +134,52 @@ function addon:CreateMainFrame()
             self.mainFrame.viewModeBtn:SetText("View: |cffffd700Profit|r")
         end
     end
+
+    -- Leveling Sort Toggle (Best / Vendor / AH). Visible only in leveling mode.
+    local sortModeBtn = CreateFrame("Button", nil, frame, "GameMenuButtonTemplate")
+    sortModeBtn:SetPoint("RIGHT", viewModeBtn, "LEFT", -4, 0)
+    sortModeBtn:SetWidth(95)
+    sortModeBtn:SetHeight(18)
+    sortModeBtn:SetNormalFontObject("GameFontNormalSmall")
+    sortModeBtn:SetHighlightFontObject("GameFontHighlightSmall")
+    sortModeBtn:SetScript("OnClick", function()
+        local cur = addon.db.levelingSort or "best"
+        local nextMode = "best"
+        if cur == "best" then nextMode = "vendor"
+        elseif cur == "vendor" then nextMode = "ah"
+        else nextMode = "best" end
+        addon.db.levelingSort = nextMode
+        addon:UpdateSortModeButton()
+        addon:RefreshMainFrame()
+    end)
+    sortModeBtn:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_BOTTOMLEFT")
+        GameTooltip:AddLine("Leveling Sort Mode")
+        GameTooltip:AddLine("Best: cheapest of vendor or AH per recipe", 1, 1, 1)
+        GameTooltip:AddLine("Vendor: sort assuming you vendor crafted items", 1, 1, 1)
+        GameTooltip:AddLine("AH: sort assuming you list crafted items on the AH", 1, 1, 1)
+        GameTooltip:Show()
+    end)
+    sortModeBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    frame.sortModeBtn = sortModeBtn
+
+    function addon:UpdateSortModeButton()
+        if not self.mainFrame or not self.mainFrame.sortModeBtn then return end
+        local btn = self.mainFrame.sortModeBtn
+        local mode = self.db.levelingSort or "best"
+        if mode == "vendor" then
+            btn:SetText("Sort: |cffffaa00Vendor|r")
+        elseif mode == "ah" then
+            btn:SetText("Sort: |cff80ffc0AH|r")
+        else
+            btn:SetText("Sort: |cffffffffBest|r")
+        end
+        if self.db.viewMode == "leveling" then
+            btn:Show()
+        else
+            btn:Hide()
+        end
+    end
     
     -- Title
     local title = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
@@ -890,8 +936,9 @@ function addon:RefreshMainFrame()
         if self.mainFrame.fullScanBtn then self.mainFrame.fullScanBtn:Disable() end
     end
 
-    -- Keep the view-mode toggle text in sync with state
+    -- Keep the view-mode + sort-mode toggles in sync with state
     if self.UpdateViewModeButton then self:UpdateViewModeButton() end
+    if self.UpdateSortModeButton then self:UpdateSortModeButton() end
 
     -- Refresh Items
     if not self.db.selectedGroupIndex or not groups[self.db.selectedGroupIndex] then
@@ -908,9 +955,10 @@ function addon:RefreshMainFrame()
     local renderOrder = {}
     for i = 1, #items do renderOrder[i] = i end
     if levelingMode then
+        local sortMode = self.db.levelingSort or "best"
         local costCache = {}
         for i, it in ipairs(items) do
-            costCache[i] = self:GetCostPerSkillUp(it)
+            costCache[i] = self:GetCostPerSkillUp(it, sortMode)
         end
         table.sort(renderOrder, function(a, b)
             local ca, cb = costCache[a], costCache[b]

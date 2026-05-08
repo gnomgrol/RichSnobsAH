@@ -18,6 +18,7 @@ function addon:InitializeData()
     if self.db.fastScan == nil then self.db.fastScan = false end
     if not self.db.viewMode then self.db.viewMode = "profit" end -- "profit" or "leveling"
     if not self.db.skillRanks then self.db.skillRanks = {} end -- [profession] = current skill level
+    if not self.db.levelingSort then self.db.levelingSort = "best" end -- "best" / "vendor" / "ah"
 end
 
 -- Discrete approximation used as a fallback when we don't have exact thresholds:
