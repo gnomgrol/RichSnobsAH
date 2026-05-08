@@ -986,7 +986,7 @@ function addon:RefreshMainFrame()
                         local diff = item.difficulty
                         local diffColor = addon:GetDifficultyColor(diff)
                         local diffLabel = addon:GetDifficultyLabel(diff)
-                        local chance = addon:GetSkillUpChance(diff)
+                        local chance = addon:GetSkillUpChance(item)
 
                         if chance > 0 and craftCost > 0 then
                             local vCost = addon:GetCostPerSkillUp(item, "vendor")
@@ -996,8 +996,14 @@ function addon:RefreshMainFrame()
                                 local color = (c < 0) and "|cff00ff80" or "|cffffffff"
                                 return color .. addon:FormatMoney(c, true) .. "|r"
                             end
-                            row.profitText:SetText(string.format("%s%s|r |cffccccccV/SP:|r %s  |cffccccccAH/SP:|r %s",
-                                diffColor, diffLabel, fmt(vCost), fmt(aCost)))
+                            -- If thresholds are known, show the precise chance %
+                            local pct = ""
+                            local precise = addon:GetPreciseSkillUpChance(item)
+                            if precise then
+                                pct = string.format(" |cff999999(%d%%)|r", math.floor(precise * 100 + 0.5))
+                            end
+                            row.profitText:SetText(string.format("%s%s|r%s |cffccccccV/SP:|r %s  |cffccccccAH/SP:|r %s",
+                                diffColor, diffLabel, pct, fmt(vCost), fmt(aCost)))
                         elseif chance > 0 then
                             row.profitText:SetText(string.format("%s%s|r |cffaaaaaa(no price data)|r", diffColor, diffLabel))
                         elseif diff == "trivial" then

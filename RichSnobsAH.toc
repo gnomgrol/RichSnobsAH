@@ -5,6 +5,7 @@
 ## Version: 1.1.6
 ## SavedVariables: RichSnobsAHDB
 
+RecipeThresholds.lua
 Data.lua
 Money.lua
 AHResults.lua

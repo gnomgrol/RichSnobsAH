@@ -17,15 +17,50 @@ function addon:InitializeData()
     if not self.db.vendorItems then self.db.vendorItems = {} end
     if self.db.fastScan == nil then self.db.fastScan = false end
     if not self.db.viewMode then self.db.viewMode = "profit" end -- "profit" or "leveling"
+    if not self.db.skillRanks then self.db.skillRanks = {} end -- [profession] = current skill level
 end
 
--- Skill-up chance per craft for vanilla/TBC profession leveling.
--- Standard accepted model: orange=100%, yellow=75%, green=25%, grey=0%.
-function addon:GetSkillUpChance(difficulty)
+-- Discrete approximation used as a fallback when we don't have exact thresholds:
+-- orange=100%, yellow=75%, green=25%, grey=0%.
+local function approxChance(difficulty)
     if difficulty == "optimal" then return 1.0 end
     if difficulty == "medium" or difficulty == "difficult" then return 0.75 end
     if difficulty == "easy" then return 0.25 end
     return 0 -- "trivial" or unknown
+end
+
+-- Precise per-recipe formula using the threshold table:
+--   X < yellow         -> 1.0
+--   yellow <= X < grey -> (grey - X) / (grey - yellow)
+--   X >= grey          -> 0
+-- Returns nil when we don't have thresholds or current skill for this recipe.
+function addon:GetPreciseSkillUpChance(item)
+    if not item or not item.recipeName or not item.profession then return nil end
+    local profTable = addon.recipeThresholds and addon.recipeThresholds[item.profession]
+    if not profTable then return nil end
+    local t = profTable[item.recipeName]
+    if not t then return nil end
+    local skill = self.db.skillRanks and self.db.skillRanks[item.profession]
+    if not skill then return nil end
+    if t.grey <= t.yellow then return nil end -- bad data, fall back
+    if skill < t.yellow then return 1.0 end
+    if skill >= t.grey then return 0 end
+    return (t.grey - skill) / (t.grey - t.yellow)
+end
+
+-- Skill-up chance per craft. Uses the precise formula when recipe thresholds
+-- and current skill are known; otherwise falls back to the discrete color
+-- approximation. Accepts either an item table (preferred) or a difficulty
+-- string for legacy callers.
+function addon:GetSkillUpChance(itemOrDifficulty)
+    if type(itemOrDifficulty) == "string" then
+        return approxChance(itemOrDifficulty)
+    end
+    local item = itemOrDifficulty
+    if not item then return 0 end
+    local precise = self:GetPreciseSkillUpChance(item)
+    if precise ~= nil then return precise end
+    return approxChance(item.difficulty)
 end
 
 function addon:GetDifficultyColor(difficulty)
@@ -91,7 +126,7 @@ local AH_CUT = 0.95 -- 5% AH cut taken off the listed price when sold
 --   "best"   -- min of vendor and AH (whichever is known). Default.
 function addon:GetCostPerSkillUp(item, mode)
     if not item or not item.reagents or #item.reagents == 0 then return nil end
-    local chance = self:GetSkillUpChance(item.difficulty)
+    local chance = self:GetSkillUpChance(item)
     if not chance or chance <= 0 then return nil end
     local craftCost = self:CalculateCraftCost(item)
     if not craftCost or craftCost <= 0 then return nil end
@@ -127,9 +162,12 @@ function addon:UpdateRecipeDifficulties()
     if not self.db or not self.db.groups then return end
     local updates = {} -- [profession][recipeName] = skillType
 
+    self.db.skillRanks = self.db.skillRanks or {}
+
     if TradeSkillFrame and TradeSkillFrame:IsVisible() then
-        local profName = GetTradeSkillLine()
+        local profName, rank = GetTradeSkillLine()
         if profName then
+            if rank and rank > 0 then self.db.skillRanks[profName] = rank end
             updates[profName] = updates[profName] or {}
             local num = GetNumTradeSkills() or 0
             for i = 1, num do
@@ -142,7 +180,12 @@ function addon:UpdateRecipeDifficulties()
     end
 
     if CraftFrame and CraftFrame:IsVisible() and GetNumCrafts then
-        local profName = (GetCraftDisplaySkillLine and GetCraftDisplaySkillLine()) or "Enchanting"
+        local profName, rank
+        if GetCraftDisplaySkillLine then
+            profName, rank = GetCraftDisplaySkillLine()
+        end
+        profName = profName or "Enchanting"
+        if rank and rank > 0 then self.db.skillRanks[profName] = rank end
         updates[profName] = updates[profName] or {}
         local num = GetNumCrafts() or 0
         for i = 1, num do
