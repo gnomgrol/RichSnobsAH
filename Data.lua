@@ -29,6 +29,21 @@ local function approxChance(difficulty)
     return 0 -- "trivial" or unknown
 end
 
+-- Pull current skill ranks for every profession the player knows from the
+-- skills pane. Lets us compute precise skill-up chances without requiring
+-- the profession window to be opened first.
+function addon:RefreshSkillRanks()
+    if not GetNumSkillLines or not GetSkillLineInfo then return end
+    self.db.skillRanks = self.db.skillRanks or {}
+    local n = GetNumSkillLines() or 0
+    for i = 1, n do
+        local name, isHeader, _, rank = GetSkillLineInfo(i)
+        if name and not isHeader and rank and rank > 0 then
+            self.db.skillRanks[name] = rank
+        end
+    end
+end
+
 -- Precise per-recipe formula using the threshold table:
 --   X < yellow         -> 1.0
 --   yellow <= X < grey -> (grey - X) / (grey - yellow)

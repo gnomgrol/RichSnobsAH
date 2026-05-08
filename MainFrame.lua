@@ -38,6 +38,8 @@ function addon:CreateMainFrame()
     frame:RegisterEvent("CRAFT_UPDATE")
     pcall(function() frame:RegisterEvent("TRADE_SKILL_SHOW") end)
     pcall(function() frame:RegisterEvent("CRAFT_SHOW") end)
+    pcall(function() frame:RegisterEvent("PLAYER_ENTERING_WORLD") end)
+    pcall(function() frame:RegisterEvent("SKILL_LINES_CHANGED") end)
     
     -- AH Events (Safe registration)
     frame:RegisterEvent("AUCTION_HOUSE_SHOW")
@@ -72,6 +74,10 @@ function addon:CreateMainFrame()
             C_Timer.After(0.05, function()
                 if addon.UpdateRecipeDifficulties then addon:UpdateRecipeDifficulties() end
             end)
+        elseif event == "PLAYER_ENTERING_WORLD" or event == "SKILL_LINES_CHANGED" then
+            -- Pull current skill ranks so the precise formula works without
+            -- requiring the user to open a profession window first
+            if addon.RefreshSkillRanks then addon:RefreshSkillRanks() end
         end
 
         if self:IsShown() then
@@ -1098,6 +1104,27 @@ function addon:RefreshMainFrame()
                 else
                     row.moveItemDownBtn:Disable()
                     row.moveItemDownBtn:GetNormalTexture():SetDesaturated(true)
+                end
+
+                -- Leveling mode: hide bag/AH counts, post, and move buttons; give the
+                -- name + leveling text the full row width (delete button stays).
+                row.name:ClearAllPoints()
+                row.name:SetPoint("LEFT", row.iconBtn, "RIGHT", 5, 5)
+                if levelingMode then
+                    row.countText:Hide()
+                    row.extraCountText:Hide()
+                    row.moveItemUpBtn:Hide()
+                    row.moveItemDownBtn:Hide()
+                    row.postItemBtn:Hide()
+                    row.name:SetPoint("RIGHT", row.delBtn, "LEFT", -5, 0)
+                else
+                    row.countText:Show()
+                    row.moveItemUpBtn:Show()
+                    row.moveItemDownBtn:Show()
+                    row.postItemBtn:Show()
+                    -- extraCountText visibility is owned by the per-item populate
+                    -- block above (shown for craftables, hidden for non-craftables)
+                    row.name:SetPoint("RIGHT", row.countText, "LEFT", -5, 0)
                 end
 
                 -- Setup Reagents
