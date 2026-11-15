@@ -1,284 +1,407 @@
-local addonName, addon = ...
+-- Saved data: the lists, prices, vendor prices and what each character has
+-- listed. Everything is keyed by item ID.
 
-function addon:InitializeData()
-    if not RichSnobsAHDB then
-        RichSnobsAHDB = {
-            minimap = { hide = false },
-            groups = {}, -- list of groups: { name = "Consumables", items = {} }
-            selectedGroupIndex = nil,
-            prices = {}, -- [itemId or name] = copper
-            ahCounts = {}, -- [characterName] = { [itemName] = count }
-            fastScan = false,
-        }
+local _, addon = ...
+
+local SCHEMA = 2
+local PRICE_KEEP = 30 * 86400   -- prices older than this go at login
+local LISTED_KEEP = 86400       -- a character's listed counts lapse after a day
+
+--[[ A list entry:
+    itemID    the item, or what the recipe makes (nil for enchants)
+    recipeID  set for crafts
+    name      the recipe's name, for crafts that make no item
+    icon      the recipe's icon, likewise
+    yield     average items one craft makes
+    reagents  { { itemID = n, count = n }, ... }
+    prof      the profession's name, to say which window to open
+    make      crafts still planned, nil when none; puts the craft in the queue,
+              drives what the list is missing, counts down as crafts finish
+    amount    the plan that Plan sets at once, kept; nil until you set one
+    expanded  reagent rows shown
+]]
+
+local function Defaults()
+    return {
+        schema = SCHEMA,
+        lists = {},        -- { name, collapsed, entries = { entry, ... } }
+        prices = {},       -- [itemID] = { p = copper per unit, t = time() }
+        vendor = {},       -- [itemID] = copper per unit, unlimited vendor supply
+        commodity = {},    -- [itemID] = true for commodities, false for items
+        listed = {},       -- [character] = { t = time(), items = { [itemID] = n } }
+        minimap = { hide = false }, -- LibDBIcon's settings: hide, minimapPos
+        duration = 2,      -- 1, 2, 3 = 2, 8, 24 hours
+        -- lastFullScan = time() of the last whole-house snapshot, for its cooldown
+    }
+end
+
+function addon:InitDB()
+    local db = RichSnobsAHDB
+    -- Forever starts fresh: nothing from the TBC data format carries over.
+    if type(db) ~= "table" or db.schema ~= SCHEMA then
+        db = Defaults()
+        RichSnobsAHDB = db
     end
-    self.db = RichSnobsAHDB
-    if not self.db.prices then self.db.prices = {} end
-    if not self.db.ahCounts then self.db.ahCounts = {} end
-    if not self.db.vendorItems then self.db.vendorItems = {} end
-    if self.db.fastScan == nil then self.db.fastScan = false end
-end
-
-function addon:AddGroup(groupName)
-    if not groupName or groupName == "" then return end
-    table.insert(self.db.groups, { name = groupName, items = {} })
-    -- Auto select the new group
-    self.db.selectedGroupIndex = #self.db.groups
-    addon:RefreshMainFrame()
-end
-
-function addon:DeleteGroup(index)
-    if self.db.groups[index] then
-        table.remove(self.db.groups, index)
-        if self.db.selectedGroupIndex == index then
-            self.db.selectedGroupIndex = nil
-        elseif self.db.selectedGroupIndex > index then
-            self.db.selectedGroupIndex = self.db.selectedGroupIndex - 1
-        end
-        addon:RefreshMainFrame()
+    for key, value in pairs(Defaults()) do
+        if db[key] == nil then db[key] = value end
     end
-end
 
-function addon:RenameGroup(index, newName)
-    if not newName or newName == "" then return end
-    if self.db.groups[index] then
-        self.db.groups[index].name = newName
-        addon:RefreshMainFrame()
-    end
-end
-
-function addon:MoveGroup(index, direction)
-    local groups = self.db.groups
-    local newIndex = index + direction
-    if newIndex < 1 or newIndex > #groups then return end
-    
-    local group = table.remove(groups, index)
-    table.insert(groups, newIndex, group)
-    
-    -- Update selection if necessary
-    if self.db.selectedGroupIndex == index then
-        self.db.selectedGroupIndex = newIndex
-    elseif self.db.selectedGroupIndex == newIndex then
-        self.db.selectedGroupIndex = index
-    end
-    
-    addon:RefreshMainFrame()
-end
-
-function addon:MoveItem(groupIndex, itemIndex, direction)
-    local group = self.db.groups[groupIndex]
-    if not group then return end
-    
-    local items = group.items
-    local newIndex = itemIndex + direction
-    if newIndex < 1 or newIndex > #items then return end
-    
-    local item = table.remove(items, itemIndex)
-    table.insert(items, newIndex, item)
-    
-    addon:RefreshMainFrame()
-end
-
-function addon:AddItemToGroup(groupIndex, itemData)
-    -- itemData expected to be { link = "...", texture = "...", count = 1, reagents = { {link=..., count=...}, ... } }
-    local group = self.db.groups[groupIndex]
-    if not group then return end
-    
-    table.insert(group.items, itemData)
-    addon.print("Added " .. (itemData.link or "item") .. " to group " .. group.name)
-    addon:RefreshMainFrame()
-    addon:ScrollItemListToBottom()
-end
-
-function addon:DeleteItem(groupIndex, itemIndex)
-    local group = self.db.groups[groupIndex]
-    if not group or not group.items[itemIndex] then return end
-    
-    table.remove(group.items, itemIndex)
-    addon.print("Item removed.")
-    addon:RefreshMainFrame()
-end
-
-function addon:GetItemPrice(itemName)
-    if self.db.vendorItems and self.db.vendorItems[itemName] then
-        return self.db.vendorItems[itemName]
-    end
-    return self.db.prices[itemName] or 0
-end
-
-function addon:UpdateAHCounts()
-    local player = UnitName("player")
-    if not player then return end
-    
-    self.db.ahCounts[player] = {}
-    local numOwnerAuctions = GetNumAuctionItems("owner")
-    
-    for i = 1, numOwnerAuctions do
-        local name, _, count, _, _, _, _, _, _, _, _, _, _, _, _, saleStatus = GetAuctionItemInfo("owner", i)
-        if name and saleStatus == 0 then -- 0 = active
-            self.db.ahCounts[player][name] = (self.db.ahCounts[player][name] or 0) + count
+    local now = time()
+    for itemID, price in pairs(db.prices) do
+        if type(price) ~= "table" or now - (price.t or 0) > PRICE_KEEP then
+            db.prices[itemID] = nil
         end
     end
-    
-    if self.mainFrame and self.mainFrame:IsShown() then
-        self:RefreshMainFrame()
+    for key, snapshot in pairs(db.listed) do
+        if now - (snapshot.t or 0) > LISTED_KEEP then db.listed[key] = nil end
+    end
+
+    self.db = db
+end
+
+--------------------------------------------------------------------------------
+-- Lists
+--------------------------------------------------------------------------------
+
+function addon:ListsChanged()
+    self.index = nil
+    self:Refresh()
+end
+
+local function Move(t, from, to)
+    if from == to or not t[from] then return end
+    local value = table.remove(t, from)
+    table.insert(t, math.max(1, math.min(to, #t + 1)), value)
+end
+
+function addon:NewList(name)
+    local list = { name = name, entries = {} }
+    table.insert(self.db.lists, list)
+    self:ListsChanged()
+    return list
+end
+
+function addon:RenameList(list, name)
+    list.name = name
+    self:ListsChanged()
+end
+
+function addon:DeleteList(list)
+    tDeleteItem(self.db.lists, list)
+    if self.selected and self.selected.list == list then self.selected = nil end
+    self:ListsChanged()
+end
+
+function addon:MoveList(from, to)
+    Move(self.db.lists, from, to)
+    self:ListsChanged()
+end
+
+function addon:FindEntry(list, itemID, recipeID)
+    for i, entry in ipairs(list.entries) do
+        if recipeID then
+            if entry.recipeID == recipeID then return entry, i end
+        elseif not entry.recipeID and entry.itemID == itemID then
+            return entry, i
+        end
     end
 end
 
-function addon:GetAHItemCount(itemName)
-    if not itemName then return 0 end
-    local total = 0
-    for charName, counts in pairs(self.db.ahCounts) do
-        total = total + (counts[itemName] or 0)
+-- Returns the entry and whether it is new; an item already on the list
+-- isn't added twice.
+function addon:AddItem(list, itemID)
+    local entry = self:FindEntry(list, itemID)
+    if entry then return entry, false end
+    entry = { itemID = itemID }
+    table.insert(list.entries, entry)
+    self:ListsChanged()
+    return entry, true
+end
+
+-- Adding a recipe that is already on the list refreshes its reagents.
+function addon:AddRecipe(list, recipe)
+    local entry = self:FindEntry(list, nil, recipe.recipeID)
+    local added = not entry
+    if added then
+        entry = {}
+        table.insert(list.entries, entry)
+    end
+    for _, key in ipairs({ "recipeID", "itemID", "name", "icon", "yield", "reagents", "prof" }) do
+        entry[key] = recipe[key]
+    end
+    self:ListsChanged()
+    return entry, added
+end
+
+function addon:RemoveEntry(list, entry)
+    tDeleteItem(list.entries, entry)
+    -- A removed craft mustn't stay behind the Craft button.
+    if self.selected and self.selected.entry == entry then self.selected = nil end
+    self:ListsChanged()
+end
+
+function addon:MoveEntry(list, from, to)
+    Move(list.entries, from, to)
+    self:ListsChanged()
+end
+
+function addon:MoveEntryToList(entry, fromList, toList)
+    if fromList == toList then return end
+    tDeleteItem(fromList.entries, entry)
+    table.insert(toList.entries, entry)
+    self:ListsChanged()
+end
+
+-- Every item a list deals in: its entries and their reagents.
+function addon:ListItemIDs(list, into)
+    into = into or {}
+    for _, entry in ipairs(list.entries) do
+        if entry.itemID then into[#into + 1] = entry.itemID end
+        for _, reagent in ipairs(entry.reagents or {}) do into[#into + 1] = reagent.itemID end
+    end
+    return into
+end
+
+-- Which entry crafts an item, and which items any list mentions.
+function addon:Index()
+    if self.index then return self.index end
+    local index = { crafts = {}, tracked = {} }
+    for _, list in ipairs(self.db.lists) do
+        for _, entry in ipairs(list.entries) do
+            if entry.itemID then
+                index.tracked[entry.itemID] = true
+                if entry.recipeID and not index.crafts[entry.itemID] then
+                    index.crafts[entry.itemID] = entry
+                end
+            end
+            for _, reagent in ipairs(entry.reagents or {}) do
+                index.tracked[reagent.itemID] = true
+            end
+        end
+    end
+    self.index = index
+    return index
+end
+
+--------------------------------------------------------------------------------
+-- Prices
+--------------------------------------------------------------------------------
+
+function addon:SetPrice(itemID, copper)
+    if not itemID or not copper or copper <= 0 then return end
+    self.db.prices[itemID] = { p = copper, t = time() }
+    self:Refresh()
+end
+
+-- The cheapest auction last seen, and when.
+function addon:GetAHPrice(itemID)
+    local price = itemID and self.db.prices[itemID]
+    if price then return price.p, price.t end
+end
+
+-- What one unit costs to buy, from a vendor or the auction house, whichever
+-- is cheaper, and which one that is.
+function addon:BuyPrice(itemID)
+    local vendor = self.db.vendor[itemID]
+    local ah = self:GetAHPrice(itemID)
+    if vendor and (not ah or vendor <= ah) then return vendor, "vendor" end
+    if ah then return ah, "ah" end
+end
+
+-- Copper per item the entry makes (per craft for enchants). complete is
+-- false when a reagent has no price yet; the sum then leaves it out.
+function addon:CraftCost(entry, visiting)
+    if not entry.reagents or #entry.reagents == 0 then return nil end
+    visiting = visiting or {}
+    if visiting[entry] then return nil end
+    visiting[entry] = true
+
+    local total, complete = 0, true
+    for _, reagent in ipairs(entry.reagents) do
+        local unit, known = self:ReagentCost(reagent.itemID, visiting)
+        if unit then total = total + unit * reagent.count end
+        if not known then complete = false end
+    end
+
+    visiting[entry] = nil
+    return total / (entry.yield or 1), complete
+end
+
+-- The cheaper of buying a reagent and crafting it from another list entry.
+function addon:ReagentCost(itemID, visiting)
+    local price = self:BuyPrice(itemID)
+    local craft = self:Index().crafts[itemID]
+    if craft then
+        local cost, complete = self:CraftCost(craft, visiting)
+        if cost and complete and (not price or cost < price) then return cost, true end
+        if not price and cost then return cost, false end
+    end
+    if price then return price, true end
+    return nil, false
+end
+
+-- What one sale brings in after the 5% auction house cut, minus the cost.
+function addon:Profit(entry)
+    local price = self:GetAHPrice(entry.itemID)
+    local cost, complete = self:CraftCost(entry)
+    if price and cost and complete then return price * 0.95 - cost end
+end
+
+--------------------------------------------------------------------------------
+-- Counts
+--------------------------------------------------------------------------------
+
+function addon:BagCount(itemID)
+    return C_Item.GetItemCount(itemID) or 0
+end
+
+-- Listed on the auction house across your characters, from each one's
+-- last visit within the day.
+function addon:ListedCount(itemID)
+    local total, now = 0, time()
+    for _, snapshot in pairs(self.db.listed) do
+        if now - snapshot.t <= LISTED_KEEP then total = total + (snapshot.items[itemID] or 0) end
     end
     return total
 end
 
-function addon:UpdateItemPrice(itemName, unitPrice, pageNum)
-    if not itemName or not unitPrice or unitPrice <= 0 then return end
-    
-    local oldPrice = self.db.prices[itemName]
-    local updated = false
-
-    -- On page 0, we can safely overwrite because it's the start of a new scan/search.
-    -- On subsequent pages, we only update if the new unitPrice is LOWER than what we found on previous pages.
-    if pageNum == 0 then
-        if oldPrice ~= unitPrice then
-            self.db.prices[itemName] = unitPrice
-            updated = true
-        end
-    else
-        if oldPrice and unitPrice < oldPrice then
-            self.db.prices[itemName] = unitPrice
-            updated = true
-        end
+-- Crafts the reagents in your bags allow. The bank doesn't count: you can't
+-- craft from it.
+function addon:CraftableCount(entry)
+    if not entry.reagents or #entry.reagents == 0 then return nil end
+    local most
+    for _, reagent in ipairs(entry.reagents) do
+        local n = math.floor(self:BagCount(reagent.itemID) / reagent.count)
+        if not most or n < most then most = n end
     end
-
-    if updated and self.mainFrame and self.mainFrame:IsShown() then
-        addon:RefreshMainFrame()
-    end
-    
-    return updated
+    return most
 end
 
-function addon:CalculateCraftCost(itemData, visited)
-    visited = visited or {}
-    if not itemData or not itemData.reagents then return 0 end
-    
-    local itemName = itemData.recipeName or (itemData.link and GetItemInfo(itemData.link)) or itemData.link
-    if itemName and visited[itemName] then return 0 end -- avoid infinite recursion
-    if itemName then visited[itemName] = true end
+-- The crafts still planned; 0 keeps a craft off the queue. Each finished
+-- craft takes one off (Professions.lua).
+function addon:Planned(entry)
+    return entry.make or 0
+end
 
-    local totalCost = 0
-    for _, reagent in ipairs(itemData.reagents) do
-        local rName = reagent.name
-        if not rName and reagent.link then
-            rName = GetItemInfo(reagent.link) or reagent.link:match("%[(.-)%]")
+function addon:SetPlanned(entry, n)
+    n = math.floor(n or 0)
+    entry.make = n > 0 and n or nil
+    self:Refresh()
+end
+
+-- The amount Plan sets at once; 0 forgets it.
+function addon:SetPlanAmount(entry, n)
+    n = math.floor(n or 0)
+    entry.amount = n > 0 and n or nil
+    self:Refresh()
+end
+
+-- Sets every craft on a list that has a stored amount to plan that amount.
+-- Returns the crafts planned in all.
+function addon:PlanList(list)
+    local total = 0
+    for _, entry in ipairs(list.entries) do
+        if entry.recipeID and entry.amount then
+            self:SetPlanned(entry, entry.amount)
+            total = total + entry.amount
         end
-        
-        local rCost = self:GetItemPrice(rName)
-        
-        -- Check if this reagent is something we can also craft
-        local craftableItem = self:FindCraftableItem(rName)
-        if craftableItem then
-            local craftCost = self:CalculateCraftCost(craftableItem, visited)
-            -- Prefer craft cost if available and cheaper than AH, OR if AH price is unknown
-            if craftCost > 0 then
-                local unitCraftCost = craftCost / (craftableItem.yield or 1)
-                if rCost == 0 or unitCraftCost < rCost then
-                    rCost = unitCraftCost
+    end
+    return total
+end
+
+-- One press of Craft: the plan, or a single craft when none is planned, cut
+-- to what the reagents in your bags allow. The plan comes second.
+function addon:CraftBatch(entry)
+    local planned = self:Planned(entry)
+    return math.min(math.max(planned, 1), self:CraftableCount(entry) or 0), planned
+end
+
+-- Every planned craft, in the order of your lists.
+function addon:Queue()
+    local queue = {}
+    for _, list in ipairs(self.db.lists) do
+        for _, entry in ipairs(list.entries) do
+            if entry.recipeID and self:Planned(entry) > 0 then
+                queue[#queue + 1] = { list = list, entry = entry }
+            end
+        end
+    end
+    return queue
+end
+
+-- How many of an item a list's planned crafts use in all.
+function addon:Need(list, itemID)
+    local need = 0
+    for _, entry in ipairs(list.entries) do
+        for _, reagent in ipairs(entry.reagents or {}) do
+            if reagent.itemID == itemID then need = need + reagent.count * self:Planned(entry) end
+        end
+    end
+    return need
+end
+
+-- What the list still lacks after your bags.
+function addon:Missing(list, itemID)
+    return math.max(0, self:Need(list, itemID) - self:BagCount(itemID))
+end
+
+--------------------------------------------------------------------------------
+-- Commodity or item auction
+--------------------------------------------------------------------------------
+
+function addon:LearnCommodity(itemID, isCommodity)
+    if itemID and type(isCommodity) == "boolean" then self.db.commodity[itemID] = isCommodity end
+    return isCommodity
+end
+
+-- True or false once the auction house has said, else nil.
+function addon:IsCommodity(itemID, location, itemKey)
+    local known = self.db.commodity[itemID]
+    if known ~= nil then return known end
+
+    if itemKey and C_AuctionHouse.GetItemKeyInfo then
+        local ok, info = pcall(C_AuctionHouse.GetItemKeyInfo, itemKey)
+        if ok and info and type(info.isCommodity) == "boolean" then
+            return self:LearnCommodity(itemID, info.isCommodity)
+        end
+    end
+
+    -- GetItemCommodityStatus takes a bag location only, not an item ID.
+    location = location or self:FindInBags(itemID)
+    if location and C_AuctionHouse.GetItemCommodityStatus and Enum.ItemCommodityStatus then
+        local ok, status = pcall(C_AuctionHouse.GetItemCommodityStatus, location)
+        if ok and status == Enum.ItemCommodityStatus.Commodity then return self:LearnCommodity(itemID, true) end
+        if ok and status == Enum.ItemCommodityStatus.Item then return self:LearnCommodity(itemID, false) end
+    end
+end
+
+-- A best guess for display before the auction house has said: stackable
+-- goods are commodities.
+function addon:GuessCommodity(itemID)
+    local known = self:IsCommodity(itemID)
+    if known ~= nil then return known end
+    local stack = select(8, C_Item.GetItemInfo(itemID))
+    return (stack or 1) > 1
+end
+
+--------------------------------------------------------------------------------
+-- Bags
+--------------------------------------------------------------------------------
+
+local LAST_BAG = NUM_TOTAL_EQUIPPED_BAG_SLOTS or NUM_BAG_SLOTS or 4
+
+-- The first stack of an item in the bags. With sellable, only one the
+-- auction house takes (not soulbound, not locked).
+function addon:FindInBags(itemID, sellable)
+    for bag = 0, LAST_BAG do
+        for slot = 1, C_Container.GetContainerNumSlots(bag) or 0 do
+            local info = C_Container.GetContainerItemInfo(bag, slot)
+            if info and info.itemID == itemID and not info.isLocked then
+                local location = ItemLocation:CreateFromBagAndSlot(bag, slot)
+                if not sellable or C_AuctionHouse.IsSellItemValid(location, false) then
+                    return location, info
                 end
             end
         end
-        
-        totalCost = totalCost + (rCost * (reagent.count or 1))
     end
-    
-    -- Cleanup visited for this path so other branches can visit it if needed
-    -- Actually, visited should probably be per-branch to avoid infinite loops, 
-    -- but allow same item in different branches. 
-    -- However, the current recursive structure uses it globally for the whole tree.
-    -- If an item appears twice in the tree, we don't want to re-calculate it? 
-    -- Actually, we SHOULD re-calculate it or cache it.
-    -- Given it's a small tree, re-calculating is fine, but we MUST prevent infinite loops.
-    if itemName then visited[itemName] = nil end
-    
-    return totalCost
-end
-
-function addon:FindCraftableItem(itemName)
-    if not itemName then return nil end
-    for _, group in ipairs(self.db.groups) do
-        for _, item in ipairs(group.items) do
-            local name = item.recipeName or (item.link and GetItemInfo(item.link))
-            if not name and item.link then
-                name = item.link:match("%[(.-)%]")
-            end
-            
-            if name == itemName then
-                return item
-            end
-        end
-    end
-    return nil
-end
-
-function addon:GetAllTrackedItemNames(groupIndex)
-    local names = {}
-    if not self.db or not self.db.groups then return names end
-    
-    local groupsToScan = {}
-    if groupIndex and self.db.groups[groupIndex] then
-        table.insert(groupsToScan, self.db.groups[groupIndex])
-    else
-        groupsToScan = self.db.groups
-    end
-
-    local function addTrackedName(name)
-        if name and (not self.db.vendorItems or not self.db.vendorItems[name]) then
-            names[name] = true
-        end
-    end
-
-    for _, group in ipairs(groupsToScan) do
-        for _, item in ipairs(group.items) do
-            -- Add recipe name (if present)
-            if item.recipeName then
-                addTrackedName(item.recipeName)
-            end
-            -- Add item name from link (may differ from recipeName)
-            if item.link then
-                local itemName = GetItemInfo(item.link)
-                if not itemName then
-                    itemName = item.link:match("%[(.-)%]")
-                end
-                addTrackedName(itemName)
-            end
-            
-            -- Add all reagents
-            if item.reagents then
-                for _, reagent in ipairs(item.reagents) do
-                    if reagent.name then
-                        addTrackedName(reagent.name)
-                    elseif reagent.link then
-                        local rName = GetItemInfo(reagent.link) or reagent.link:match("%[(.-)%]")
-                        addTrackedName(rName)
-                    end
-                end
-            end
-        end
-    end
-    return names
-end
-
-function addon:GetBagItemCount(link)
-    if not link then return 0 end
-    local itemID = link:match("item:(%d+)")
-    if not itemID then return 0 end
-    
-    -- In TBC Anniversary/Classic, C_Item.GetItemCount is the preferred modern API
-    if C_Item and C_Item.GetItemCount then
-        return C_Item.GetItemCount(itemID, false)
-    end
-    -- Fallback to global GetItemCount
-    return GetItemCount(itemID)
 end

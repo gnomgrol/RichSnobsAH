@@ -1,0 +1,312 @@
+-- Small pieces the panes share: buttons, tabs, the price ladder, the item
+-- header, menus and text prompts.
+
+local _, addon = ...
+local UI = addon.UI
+
+function UI.Button(parent, text, width, height)
+    local button = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+    button:SetText(text)
+    button:SetSize(width or 100, height or 22)
+    return button
+end
+
+function UI.Text(parent, font, justify)
+    local text = parent:CreateFontString(nil, "OVERLAY", font or "GameFontHighlightSmall")
+    text:SetJustifyH(justify or "LEFT")
+    text:SetWordWrap(false)
+    return text
+end
+
+function UI.Tooltip(owner, title, line)
+    GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
+    GameTooltip:SetText(title)
+    if line then GameTooltip:AddLine(line, 1, 1, 1, true) end
+    GameTooltip:Show()
+end
+
+function UI.ItemLink(itemID)
+    return itemID and select(2, C_Item.GetItemInfo(itemID))
+end
+
+-- Shift-click links the item in chat, Ctrl-click previews it, as anywhere.
+function UI.ModifiedClick(itemID)
+    local link = UI.ItemLink(itemID)
+    if link and IsModifiedClick() then
+        HandleModifiedItemClick(link)
+        return true
+    end
+end
+
+--------------------------------------------------------------------------------
+-- Icon buttons on Blizzard's frames
+--------------------------------------------------------------------------------
+
+-- A small icon button; the caller places it. art: { icon = texture } for an
+-- item-style icon, or { normal, pushed, highlight } for button art.
+function UI.IconButton(parent, size, art, title, line, onClick)
+    local button = CreateFrame("Button", nil, parent)
+    button:SetSize(size, size)
+    button:SetFrameLevel(parent:GetFrameLevel() + 10)
+    if art.icon then
+        button:SetNormalTexture(art.icon)
+        button:GetNormalTexture():SetTexCoord(0.08, 0.92, 0.08, 0.92)
+        button:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
+    else
+        button:SetNormalTexture(art.normal)
+        button:SetPushedTexture(art.pushed)
+        button:SetHighlightTexture(art.highlight, "ADD")
+    end
+    button:SetScript("OnClick", onClick)
+    button:SetScript("OnEnter", function(self) UI.Tooltip(self, title, line) end)
+    button:SetScript("OnLeave", GameTooltip_Hide)
+    return button
+end
+
+--------------------------------------------------------------------------------
+-- Tabs: names in a row, the active one gold and underlined
+--------------------------------------------------------------------------------
+
+function UI.Tabs(parent, names, onSelect)
+    local tabs = { buttons = {} }
+    local previous
+    for index, name in ipairs(names) do
+        local tab = CreateFrame("Button", nil, parent)
+        tab.label = UI.Text(tab, "GameFontNormal", "CENTER")
+        tab.label:SetPoint("CENTER", 0, 1)
+        tab.label:SetText(name)
+        tab:SetSize(tab.label:GetStringWidth() + 18, 24)
+        tab:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+        tab.line = tab:CreateTexture(nil, "ARTWORK")
+        tab.line:SetColorTexture(1, 0.82, 0, 1)
+        tab.line:SetHeight(2)
+        tab.line:SetPoint("BOTTOMLEFT", 4, 0)
+        tab.line:SetPoint("BOTTOMRIGHT", -4, 0)
+        if previous then
+            tab:SetPoint("LEFT", previous, "RIGHT", 2, 0)
+        else
+            tab:SetPoint("TOPLEFT")
+        end
+        tab:SetScript("OnClick", function() tabs:Select(index) end)
+        tabs.buttons[index] = tab
+        previous = tab
+    end
+
+    function tabs:Select(index)
+        self.selected = index
+        for i, tab in ipairs(self.buttons) do
+            local active = i == index
+            tab.line:SetShown(active)
+            tab.label:SetFontObject(active and "GameFontNormal" or "GameFontDisable")
+        end
+        onSelect(index)
+    end
+
+    function tabs:SetShown(shown)
+        for _, tab in ipairs(self.buttons) do tab:SetShown(shown) end
+    end
+
+    return tabs
+end
+
+--------------------------------------------------------------------------------
+-- The item a pane is about: icon, name, a note on the right, and a button
+-- to add it to a list
+--------------------------------------------------------------------------------
+
+function UI.ItemHeader(parent)
+    local header = CreateFrame("Frame", nil, parent)
+    header:SetHeight(28)
+
+    header.iconButton = CreateFrame("Button", nil, header)
+    header.iconButton:SetSize(24, 24)
+    header.iconButton:SetPoint("LEFT")
+    header.icon = header.iconButton:CreateTexture(nil, "ARTWORK")
+    header.icon:SetAllPoints()
+    header.iconButton:SetScript("OnEnter", function(self)
+        if not header.itemID then return end
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetItemByID(header.itemID)
+        GameTooltip:Show()
+    end)
+    header.iconButton:SetScript("OnLeave", GameTooltip_Hide)
+    header.iconButton:SetScript("OnClick", function() UI.ModifiedClick(header.itemID) end)
+
+    header.add = UI.Button(header, "+", 22, 20)
+    header.add:SetPoint("RIGHT")
+    header.add:SetScript("OnClick", function(self)
+        local itemID = header.itemID
+        addon:ShowListPicker(self, "Add to list", function(list)
+            local _, added = addon:AddItem(list, itemID)
+            addon:SetStatus(("%s %s %s"):format(addon:ItemName(itemID) or "Item",
+                added and "added to" or "is already on", list.name))
+        end)
+    end)
+    header.add:SetScript("OnEnter", function(self) UI.Tooltip(self, "Add to a list") end)
+    header.add:SetScript("OnLeave", GameTooltip_Hide)
+
+    header.note = UI.Text(header, "GameFontDisableSmall", "RIGHT")
+    header.note:SetPoint("RIGHT", header.add, "LEFT", -6, 0)
+
+    header.name = UI.Text(header, "GameFontNormal")
+    header.name:SetPoint("LEFT", header.iconButton, "RIGHT", 6, 0)
+    header.name:SetPoint("RIGHT", header.note, "LEFT", -6, 0)
+
+    function header:SetItem(itemID, note)
+        self.itemID = itemID
+        self.icon:SetTexture(addon:ItemIcon(itemID))
+        self.name:SetText(addon:ItemName(itemID) or "...")
+        self.name:SetTextColor(addon:QualityColor(itemID))
+        self.note:SetText(note or "")
+        self.add:SetShown(itemID ~= nil)
+    end
+
+    return header
+end
+
+--------------------------------------------------------------------------------
+-- The price ladder: one item's cheapest offers
+--------------------------------------------------------------------------------
+
+local ROW = 16
+
+-- A commodity shows unit price and how many; an item auction shows price
+-- and time left. With onSelect, item rows can be picked.
+function UI.Ladder(parent, rowCount, onSelect)
+    local ladder = CreateFrame("Frame", nil, parent)
+    ladder:SetHeight(ROW * (rowCount + 1) + 4)
+    ladder.rows = {}
+
+    ladder.leftHead = UI.Text(ladder, "GameFontNormalSmall")
+    ladder.leftHead:SetPoint("TOPLEFT", 4, 0)
+    ladder.rightHead = UI.Text(ladder, "GameFontNormalSmall", "RIGHT")
+    ladder.rightHead:SetPoint("TOPRIGHT", -4, 0)
+
+    ladder.message = UI.Text(ladder, "GameFontDisableSmall", "CENTER")
+    ladder.message:SetPoint("TOP", 0, -ROW * 2)
+
+    for i = 1, rowCount do
+        local row = CreateFrame("Button", nil, ladder)
+        row:SetHeight(ROW)
+        row:SetPoint("TOPLEFT", 0, -ROW * i - 2)
+        row:SetPoint("TOPRIGHT", 0, -ROW * i - 2)
+        row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+        row.selection = row:CreateTexture(nil, "BACKGROUND")
+        row.selection:SetAllPoints()
+        row.selection:SetColorTexture(1, 0.82, 0, 0.18)
+        row.price = UI.Text(row)
+        row.price:SetPoint("LEFT", 4, 0)
+        row.right = UI.Text(row, nil, "RIGHT")
+        row.right:SetPoint("RIGHT", -4, 0)
+        row.note = UI.Text(row, "GameFontDisableSmall", "RIGHT")
+        row.note:SetPoint("RIGHT", -70, 0)
+        row:SetScript("OnClick", function(self)
+            if onSelect and self.data then onSelect(self.data) end
+        end)
+        ladder.rows[i] = row
+    end
+
+    -- rows: from addon.Auction.results; message: shown instead of rows.
+    function ladder:SetData(rows, commodity, selected, message)
+        self.leftHead:SetText(commodity and "Unit price" or "Price")
+        self.rightHead:SetText(commodity and "Available" or "Time left")
+        self.message:SetText(message or "")
+        for i, row in ipairs(self.rows) do
+            local data = not message and rows and rows[i]
+            row.data = data
+            row:SetShown(data and true or false)
+            if data then
+                row.price:SetText(addon.Money(data.unit, true))
+                if commodity then
+                    row.right:SetText(BreakUpLargeNumbers(data.quantity))
+                else
+                    row.right:SetText(data.timeLeft and addon.Age(data.timeLeft) or "")
+                end
+                row.note:SetText(data.own and "|cff66bbffyours|r" or "")
+                row.selection:SetShown(selected ~= nil and data == selected)
+            end
+        end
+    end
+
+    return ladder
+end
+
+--------------------------------------------------------------------------------
+-- Menus and prompts
+--------------------------------------------------------------------------------
+
+-- A menu of your lists, plus a new one.
+function addon:ShowListPicker(owner, title, onPick)
+    MenuUtil.CreateContextMenu(owner, function(_, root)
+        root:CreateTitle(title)
+        for _, list in ipairs(addon.db.lists) do
+            root:CreateButton(list.name, function() onPick(list) end)
+        end
+        root:CreateButton("New list...", function()
+            addon:Prompt("Name of the new list:", "", function(name)
+                onPick(addon:NewList(name))
+            end)
+        end)
+    end)
+end
+
+local function DialogEditBox(dialog)
+    return dialog.editBox or dialog.EditBox or (dialog.GetEditBox and dialog:GetEditBox())
+end
+
+local function AcceptPrompt(dialog, data)
+    data = data or dialog.data
+    local text = strtrim(DialogEditBox(dialog):GetText() or "")
+    if text ~= "" and data and data.onAccept then data.onAccept(text) end
+end
+
+-- Only keys are added: replacing StaticPopupDialogs itself would taint it.
+StaticPopupDialogs.RICHSNOBSAH_PROMPT = {
+    text = "%s",
+    button1 = ACCEPT,
+    button2 = CANCEL,
+    hasEditBox = true,
+    maxLetters = 64,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+    preferredIndex = 3,
+    OnShow = function(dialog, data)
+        data = data or dialog.data
+        local box = DialogEditBox(dialog)
+        box:SetText(data and data.default or "")
+        box:HighlightText()
+        box:SetFocus()
+    end,
+    OnAccept = AcceptPrompt,
+    EditBoxOnEnterPressed = function(box, data)
+        local dialog = box:GetParent()
+        AcceptPrompt(dialog, data)
+        dialog:Hide()
+    end,
+    EditBoxOnEscapePressed = function(box)
+        box:GetParent():Hide()
+    end,
+}
+
+StaticPopupDialogs.RICHSNOBSAH_CONFIRM = {
+    text = "%s",
+    button1 = YES,
+    button2 = NO,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+    preferredIndex = 3,
+    OnAccept = function(dialog, data)
+        data = data or dialog.data
+        if data and data.onAccept then data.onAccept() end
+    end,
+}
+
+function addon:Prompt(text, default, onAccept)
+    StaticPopup_Show("RICHSNOBSAH_PROMPT", text, nil, { default = default, onAccept = onAccept })
+end
+
+function addon:Confirm(text, onAccept)
+    StaticPopup_Show("RICHSNOBSAH_CONFIRM", text, nil, { onAccept = onAccept })
+end
