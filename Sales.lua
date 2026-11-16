@@ -4,16 +4,60 @@
 
 local _, addon = ...
 
+-- Item IDs by name, from every item the addon knows: your lists first, then
+-- recipes, your auctions, prices, vendor prices and price history. Built when
+-- first needed, and again at each visit to the mailbox.
+local byName
+
+local function KnownNames()
+    local names, checked = {}, {}
+    local function Add(itemID)
+        if not itemID or checked[itemID] then return end
+        checked[itemID] = true
+        local name = C_Item.GetItemNameByID(itemID)
+        if name and not names[name] then names[name] = itemID end
+    end
+    for itemID in pairs(addon:Index().tracked) do Add(itemID) end
+    for itemID in pairs(addon.db.recipes) do Add(itemID) end
+    for _, snapshot in pairs(addon.db.listed) do
+        for itemID in pairs(snapshot.items) do Add(itemID) end
+    end
+    for itemID in pairs(addon.db.prices) do Add(itemID) end
+    for itemID in pairs(addon.db.vendor) do Add(itemID) end
+    for itemID in pairs(addon.db.history.days) do Add(itemID) end
+    for itemID in pairs(addon.db.history.weeks) do Add(itemID) end
+    return names
+end
+
+-- The mail names the item only. C_Item.GetItemInfoInstant finds an ID by
+-- name for some items only (it missed most of the first sales), so the rest
+-- are looked up among the items the addon knows.
+local function ItemIDByName(name)
+    if not name then return nil end
+    local itemID = C_Item.GetItemInfoInstant(name)
+    if itemID then return itemID end
+    byName = byName or KnownNames()
+    return byName[name]
+end
+
+addon:On("MAIL_SHOW", function() byName = nil end)
+
+-- Sales saved without an item ID get one where the name is known now.
+addon:Listen("LOGIN", function()
+    for _, sale in ipairs(addon.db.sales) do
+        if not sale.itemID then sale.itemID = ItemIDByName(sale.name) end
+    end
+end)
+
 -- What each item brought: { units, sales, total, low, high } per item ID,
--- or per name for an item the client didn't know when it sold. Built when
--- first asked for, and again after the next sale.
+-- or per name for an item whose ID isn't known. Built when first asked for,
+-- and again after the next sale.
 local stats
 
 local function BuildStats()
     stats = {}
     for _, sale in ipairs(addon.db.sales) do
-        -- An item the client didn't know when it sold may be known by now.
-        sale.itemID = sale.itemID or C_Item.GetItemInfoInstant(sale.name)
+        sale.itemID = sale.itemID or ItemIDByName(sale.name)
         local key = sale.itemID or sale.name
         local item = stats[key]
         if not item then
@@ -49,8 +93,7 @@ local function Record(index)
     if kind ~= "seller" or not name or not money or money <= 0 then return end
     taken[index] = true
 
-    -- The mail names the item; the client finds its ID if it knows the item.
-    local itemID = C_Item.GetItemInfoInstant(name)
+    local itemID = ItemIDByName(name)
     local craft = addon:CraftFor(itemID)
     local cost, complete
     if craft then cost, complete = addon:CraftCost(craft) end

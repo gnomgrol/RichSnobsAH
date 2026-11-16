@@ -280,8 +280,8 @@ function UI.AddToList(list, itemID)
     if not (addon.window and addon.window:IsShown()) then UIErrorsFrame:AddMessage(text, 1, 0.82, 0) end
 end
 
--- An item's menu: search for it at the auction house, or add it to a list.
--- Alt-click on any item opens it too (Window.lua).
+-- An item's menu: search for it at the auction house, see its price history,
+-- or add it to a list. Alt-click on any item opens it too (Window.lua).
 function addon:ShowItemMenu(owner, itemID)
     MenuUtil.CreateContextMenu(owner, function(_, root)
         root:CreateTitle(addon:ItemName(itemID) or "")
@@ -290,6 +290,7 @@ function addon:ShowItemMenu(owner, itemID)
             addon:Select({ itemID = itemID }, "buy")
             addon.Auction:Search(itemID)
         end):SetEnabled(addon.Auction.isOpen)
+        root:CreateButton("Price history", function() addon:ShowHistory(itemID) end)
         root:CreateDivider()
         root:CreateTitle("Add to list")
         for _, list in ipairs(addon.db.lists) do

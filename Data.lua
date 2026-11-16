@@ -33,6 +33,8 @@ local function Defaults()
                            -- recipes make, saved from their profession windows
         sales = {},        -- { t, itemID, name, count, price, cut, cost, char }, oldest first,
                            -- kept for good; from the auction house's mail (Sales.lua)
+        history = { days = {}, weeks = {} }, -- [itemID] = the item's daily and weekly
+                           -- prices, each packed into a string (History.lua); kept for good
         minimap = { hide = false }, -- LibDBIcon's settings: hide, minimapPos
         duration = 2,      -- 1, 2, 3 = 2, 8, 24 hours
         -- lastFullScan = time() of the last whole-house snapshot, for its cooldown
@@ -191,9 +193,11 @@ end
 -- Prices
 --------------------------------------------------------------------------------
 
-function addon:SetPrice(itemID, copper)
+-- count, how many were up, goes to the price history when the source knows it.
+function addon:SetPrice(itemID, copper, count)
     if not itemID or not copper or copper <= 0 then return end
     self.db.prices[itemID] = { p = copper, t = time() }
+    self:RecordHistory(itemID, copper, count)
     self:Refresh()
 end
 

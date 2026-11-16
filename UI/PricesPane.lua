@@ -1,6 +1,7 @@
 -- The Prices tab: look up any item the addon has a price for by typing part
 -- of its name, with or without the auction house open. Names come from the
 -- client's item data, which loads on request, so results fill in as it does.
+-- Each row has bars of the item's cheapest price per day over 30 days.
 
 local _, addon = ...
 local UI = addon.UI
@@ -9,9 +10,18 @@ local ROW_HEIGHT = 20
 local SEARCH_DELAY = 0.15 -- seconds; typing and name loads are gathered
 local YELLOW = { 1, 0.85, 0.2 }
 
+local TREND_DAYS = 30
+local BAR_WIDTH = 3
+local BAR_BOTTOM = 3            -- the bars stand this far above the row's bottom
+local BAR_LOW, BAR_HIGH = 2, 14 -- the heights of the cheapest and dearest day
+local MIN_SPAN = 0.2            -- the scale spans at least this share of the average
+local BAR_COLOR = { 0.8, 0.8, 0.8, 0.9 }
+
 local COLUMNS = {
     { key = "price", label = "Price", width = 72, tip = "Cheapest auction last seen" },
     { key = "seen", label = "Seen", width = 56, tip = "How long ago that price was seen" },
+    { key = "trend", label = "30 days", width = TREND_DAYS * BAR_WIDTH + 8,
+      tip = "Each day's cheapest price, today at the right. Click for the price history." },
     { key = "vendor", label = "Vendor", width = 72, tip = "Bought from a vendor" },
 }
 
@@ -77,7 +87,11 @@ local function OnRowClick(row, button)
     if not itemID then return end
     if button == "RightButton" then
         addon:ShowItemMenu(row, itemID)
-    elseif not UI.ModifiedClick(itemID) then
+    elseif UI.ModifiedClick(itemID) then
+        return
+    elseif row.cells.trend:IsMouseOver() then
+        addon:ShowHistory(itemID)
+    else
         -- At the auction house the Buy tab shows it.
         addon:Select({ itemID = itemID }, "buy")
     end
@@ -108,7 +122,22 @@ local function InitRow(row)
     local right = -4
     for i = #COLUMNS, 1, -1 do
         local column = COLUMNS[i]
-        local cell = UI.Text(row, nil, "RIGHT")
+        local cell
+        if column.key == "trend" then
+            cell = CreateFrame("Frame", nil, row)
+            cell:SetHeight(ROW_HEIGHT)
+            cell.bars = {}
+            local left = column.width - 4 - TREND_DAYS * BAR_WIDTH
+            for day = 1, TREND_DAYS do
+                local bar = cell:CreateTexture(nil, "ARTWORK")
+                bar:SetWidth(BAR_WIDTH)
+                bar:SetPoint("BOTTOMLEFT", left + (day - 1) * BAR_WIDTH, BAR_BOTTOM)
+                bar:SetColorTexture(unpack(BAR_COLOR))
+                cell.bars[day] = bar
+            end
+        else
+            cell = UI.Text(row, nil, "RIGHT")
+        end
         cell:SetWidth(column.width - 4)
         cell:SetPoint("RIGHT", right, 0)
         right = right - column.width
@@ -125,6 +154,26 @@ local function InitRow(row)
     row:SetScript("OnLeave", GameTooltip_Hide)
 end
 
+-- The scale spans at least a fifth of the average, so small swings look small.
+local function DrawTrend(cell, itemID)
+    local stats = addon:PriceStats(itemID, TREND_DAYS)
+    if not stats then
+        for _, bar in ipairs(cell.bars) do bar:Hide() end
+        return
+    end
+    local span = math.max(stats.high - stats.low, stats.avg * MIN_SPAN)
+    local base = (stats.low + stats.high - span) / 2
+    for day, bar in ipairs(cell.bars) do
+        local price = stats.byDay[day]
+        if price then
+            bar:SetHeight(BAR_LOW + (price - base) / span * (BAR_HIGH - BAR_LOW))
+            bar:Show()
+        else
+            bar:Hide()
+        end
+    end
+end
+
 local function UpdateRow(row, data)
     InitRow(row)
     row.data = data
@@ -138,6 +187,7 @@ local function UpdateRow(row, data)
     row.cells.price:SetText(price and addon.Money(price) or "")
     row.cells.seen:SetText(seen and addon.Age(time() - seen) or "")
     row.cells.vendor:SetText(vendor and addon.Money(vendor) or "")
+    DrawTrend(row.cells.trend, itemID)
 
     local selected = addon.selected
     row.selection:SetShown(selected ~= nil and selected.itemID == itemID)

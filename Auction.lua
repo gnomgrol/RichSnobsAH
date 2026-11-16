@@ -168,16 +168,21 @@ function Auction:NextBatch()
 end
 
 -- Every browse answer, ours or one from Blizzard's frame, updates prices.
-local function RecordBrowse(results)
-    local found = {}
+-- An item can have several results (one per item key); withCounts adds up
+-- how many are up, for a full answer only, since a later page holds the rest.
+local function RecordBrowse(results, withCounts)
+    local found, counts = {}, {}
     for _, result in ipairs(results or {}) do
         local itemID = result.itemKey and result.itemKey.itemID
         local price = result.minPrice
-        if itemID and price and price > 0 and (not found[itemID] or price < found[itemID]) then
-            found[itemID] = price
+        if itemID and price and price > 0 then
+            if not found[itemID] or price < found[itemID] then found[itemID] = price end
+            counts[itemID] = (counts[itemID] or 0) + (result.totalQuantity or 0)
         end
     end
-    for itemID, price in pairs(found) do addon:SetPrice(itemID, price) end
+    for itemID, price in pairs(found) do
+        addon:SetPrice(itemID, price, withCounts and counts[itemID] > 0 and counts[itemID] or nil)
+    end
     return found
 end
 
@@ -192,7 +197,7 @@ local function AnswersBatch(found, batch)
 end
 
 addon:On("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", function()
-    local found = RecordBrowse(C_AuctionHouse.GetBrowseResults())
+    local found = RecordBrowse(C_AuctionHouse.GetBrowseResults(), true)
     local current = scan
     if current and current.waiting and AnswersBatch(found, current.waiting) then
         current.waiting = nil
@@ -212,8 +217,11 @@ end)
 local FULL_SCAN_COOLDOWN = 15 * 60  -- the house allows one snapshot per 15 minutes
 local FULL_SCAN_TIMEOUT = 60        -- seconds to wait for the snapshot to arrive
 local READ_PER_FRAME = 1000         -- rows read per frame, so the game doesn't freeze
+local SAVE_PER_FRAME = 500          -- items whose price and history are saved per frame
 
-local full -- the scan waiting or being read: { total, index, cheapest = { [itemID] = unit } }
+-- The scan waiting, being read or being saved: { total, index,
+-- cheapest = { [itemID] = unit }, counts = { [itemID] = n }, ids, saved, now }
+local full
 
 -- Seconds until the house allows the next snapshot.
 function Auction:FullScanWait()
@@ -237,7 +245,7 @@ function Auction:FullScan()
         return
     end
 
-    local current = { cheapest = {} }
+    local current = { cheapest = {}, counts = {} }
     full = current
     addon.db.lastFullScan = time()
     addon:SetStatus("Downloading the whole auction house...")
@@ -250,17 +258,43 @@ function Auction:FullScan()
     addon:Refresh()
 end
 
+-- Saves the snapshot's prices a slice per frame: each item's history takes
+-- a moment, and thousands of them in one frame would freeze the game. The
+-- snapshot is in hand by now, so saving goes on if the auction house closes.
+local function SaveSnapshot(current)
+    local ids = current.ids
+    local last = math.min(current.saved + SAVE_PER_FRAME, #ids)
+    for i = current.saved + 1, last do
+        local itemID = ids[i]
+        local price = math.floor(current.cheapest[itemID] + 0.5)
+        addon.db.prices[itemID] = { p = price, t = current.now }
+        addon:RecordHistory(itemID, price, current.counts[itemID])
+    end
+    current.saved = last
+
+    if last < #ids then
+        addon:SetStatus("Saving prices", last, #ids)
+        C_Timer.After(0, function() SaveSnapshot(current) end)
+        return
+    end
+    if full == current then full = nil end
+    addon:SetStatus(("Scanned %s auctions: prices for %s items"):format(
+        BreakUpLargeNumbers(current.total), BreakUpLargeNumbers(#ids)))
+    addon:Refresh()
+end
+
 -- Snapshot rows are 0-based and carry the stack's whole buyout, so the
 -- price per unit is buyout / count. Bid-only auctions have no buyout.
 local function ReadSnapshot(current)
     if full ~= current then return end
-    local cheapest = current.cheapest
+    local cheapest, counts = current.cheapest, current.counts
     local last = math.min(current.index + READ_PER_FRAME, current.total) - 1
     for i = current.index, last do
         local _, _, count, _, _, _, _, _, _, buyout, _, _, _, _, _, _, itemID = C_AuctionHouse.GetReplicateItemInfo(i)
         if itemID and buyout and buyout > 0 and count and count > 0 then
             local unit = buyout / count
             if not cheapest[itemID] or unit < cheapest[itemID] then cheapest[itemID] = unit end
+            counts[itemID] = (counts[itemID] or 0) + count
         end
     end
     current.index = last + 1
@@ -271,15 +305,10 @@ local function ReadSnapshot(current)
         return
     end
 
-    local now, items = time(), 0
-    for itemID, unit in pairs(cheapest) do
-        addon.db.prices[itemID] = { p = math.floor(unit + 0.5), t = now }
-        items = items + 1
-    end
-    full = nil
-    addon:SetStatus(("Scanned %s auctions: prices for %s items"):format(
-        BreakUpLargeNumbers(current.total), BreakUpLargeNumbers(items)))
-    addon:Refresh()
+    local ids = {}
+    for itemID in pairs(cheapest) do ids[#ids + 1] = itemID end
+    current.ids, current.saved, current.now = ids, 0, time()
+    SaveSnapshot(current)
 end
 
 -- Only a snapshot this addon asked for is read. Another addon's full scan

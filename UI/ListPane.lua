@@ -222,6 +222,7 @@ local function EntryMenu(root, data)
         end):SetEnabled(isOpen)
         root:CreateButton("Sell", function() addon:Select(Selection(data), "sell") end)
             :SetEnabled(isOpen and addon:BagCount(itemID) > 0)
+        root:CreateButton("Price history", function() addon:ShowHistory(itemID) end)
     end
     if entry.recipeID then
         local can, why = addon.Prof:CraftState(entry)
@@ -254,6 +255,7 @@ local function ReagentMenu(root, data)
         addon:Select(Selection(data), "buy")
         addon.Auction:Search(itemID)
     end):SetEnabled(addon.Auction.isOpen)
+    root:CreateButton("Price history", function() addon:ShowHistory(itemID) end)
     local add = root:CreateButton("Add to list")
     for _, list in ipairs(addon.db.lists) do
         add:CreateButton(list.name, function() addon:AddItem(list, itemID) end)
