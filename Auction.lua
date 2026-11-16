@@ -352,15 +352,17 @@ addon:On("ITEM_SEARCH_RESULTS_UPDATED", function(itemKey)
     for i = 1, math.min(C_AuctionHouse.GetNumItemSearchResults(itemKey) or 0, MAX_ROWS) do
         local r = C_AuctionHouse.GetItemSearchResultInfo(itemKey, i)
         -- Bid-only auctions can't be bought out, so they aren't offers here.
+        -- A row gathers identical one-item auctions: quantity is how many,
+        -- buyoutAmount what one costs, and a purchase buys one.
         if r and r.buyoutAmount and r.buyoutAmount > 0 then
-            local quantity = math.max(1, r.quantity or 1)
             rows[#rows + 1] = {
-                unit = r.buyoutAmount / quantity,
+                unit = r.buyoutAmount,
                 buyout = r.buyoutAmount,
-                quantity = quantity,
+                quantity = math.max(1, r.quantity or 1),
                 auctionID = r.auctionID,
                 own = r.containsOwnerItem and true or false,
-                timeLeft = r.timeLeftSeconds,
+                timeLeft = r.timeLeftSeconds, -- your own auctions only
+                band = r.timeLeft,            -- Enum.AuctionHouseTimeLeftBand
             }
         end
     end

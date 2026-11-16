@@ -19,10 +19,12 @@ Data.lua
 Auction.lua
 Professions.lua
 Vendor.lua
+Sales.lua
 UI\Widgets.lua
 UI\ListPane.lua
 UI\QueuePane.lua
 UI\PricesPane.lua
+UI\SalesPane.lua
 UI\BuyPane.lua
 UI\SellPane.lua
 UI\AuctionsPane.lua

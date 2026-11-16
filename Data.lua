@@ -29,6 +29,10 @@ local function Defaults()
         vendor = {},       -- [itemID] = copper per unit, unlimited vendor supply
         commodity = {},    -- [itemID] = true for commodities, false for items
         listed = {},       -- [character] = { t = time(), items = { [itemID] = n } }
+        recipes = {},      -- [itemID] = { reagents, yield }: what your characters' learned
+                           -- recipes make, saved from their profession windows
+        sales = {},        -- { t, itemID, name, count, price, cut, cost, char }, oldest first,
+                           -- kept for good; from the auction house's mail (Sales.lua)
         minimap = { hide = false }, -- LibDBIcon's settings: hide, minimapPos
         duration = 2,      -- 1, 2, 3 = 2, 8, 24 hours
         -- lastFullScan = time() of the last whole-house snapshot, for its cooldown
@@ -225,6 +229,12 @@ function addon:CraftCost(entry, visiting)
 
     visiting[entry] = nil
     return total / (entry.yield or 1), complete
+end
+
+-- What crafts an item: the list entry that does, else a recipe one of your
+-- characters knows.
+function addon:CraftFor(itemID)
+    return itemID and (self:Index().crafts[itemID] or self.db.recipes[itemID])
 end
 
 -- The cheaper of buying a reagent and crafting it from another list entry.

@@ -149,11 +149,27 @@ end
 -- The pane
 --------------------------------------------------------------------------------
 
+-- The first queued craft held back only by its closed profession window,
+-- and the spell that opens it.
+local function FirstToOpen()
+    for _, queued in ipairs(addon:Queue()) do
+        local _, _, spell = addon.Prof:CraftState(queued.entry)
+        if spell then return queued.entry, spell end
+    end
+end
+
+-- With nothing ready, the button opens the profession of the next craft.
 local function UpdateNext(queued)
     local entry, count = addon.Prof:NextQueued()
-    pane.craftNext:SetEnabled(entry ~= nil)
+    local closed, spell
+    if not entry then closed, spell = FirstToOpen() end
+    pane.craftNext:SetOpens(spell)
+    pane.craftNext:SetText(closed and ("Open " .. closed.prof) or "Craft next")
+    pane.craftNext:SetEnabled(entry ~= nil or closed ~= nil)
     if entry then
         pane.nextText:SetText(("%s x%d"):format(addon:EntryName(entry), count))
+    elseif closed then
+        pane.nextText:SetText(addon:EntryName(closed))
     else
         pane.nextText:SetText(queued > 0 and "Nothing in the queue is ready" or "")
     end
@@ -163,14 +179,15 @@ function UI.CreateQueuePane(parent)
     pane = CreateFrame("Frame", nil, parent)
 
     -- The button sits level with the buttons on the other tabs.
-    pane.craftNext = UI.Button(pane, "Craft next", 120, 26)
-    pane.craftNext:SetPoint("BOTTOMLEFT", 8, 8)
-    pane.craftNext:SetScript("OnClick", function()
+    pane.craftNext = UI.CraftButton(pane, 120, function()
         local entry, count = addon.Prof:NextQueued()
         if entry then addon.Prof:Craft(entry, count) end
     end)
+    pane.craftNext:SetText("Craft next")
+    pane.craftNext:SetPoint("BOTTOMLEFT", 8, 8)
     pane.craftNext:SetScript("OnEnter", function(self)
-        UI.Tooltip(self, "Craft next", "The first ready craft in the queue, as many as planned or your bags allow")
+        UI.Tooltip(self, self:GetText(), self:GetAttribute("spell") and "Opens the profession of the next craft"
+            or "The first ready craft in the queue, as many as planned or your bags allow")
     end)
     pane.craftNext:SetScript("OnLeave", GameTooltip_Hide)
     pane.craftNext:SetMotionScriptsWhileDisabled(true)

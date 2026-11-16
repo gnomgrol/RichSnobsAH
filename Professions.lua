@@ -1,9 +1,11 @@
 -- Recipes from Blizzard's Professions frame: the "Add to list" button,
--- crafting from the list and the queue, and plans counting down.
+-- crafting from the list and the queue, plans counting down, and saving
+-- your learned recipes for the tooltips.
 --
 -- Crafting works only while the recipe's profession window is open, because
--- addon code can't open a profession on Forever (OpenTradeSkill is blocked)
--- and CraftRecipe does nothing for a recipe that isn't in the open window.
+-- CraftRecipe does nothing for a recipe that isn't in the open window. Addon
+-- code can't open a profession on Forever (OpenTradeSkill is blocked), but a
+-- secure button can cast the spell that does (UI.CraftButton).
 
 local _, addon = ...
 
@@ -19,6 +21,23 @@ local function Call(fn, ...)
     if ok then return a, b, c, d end
 end
 
+local saved = {} -- recipe IDs saved this session, so each is read once
+
+-- Learned recipes are saved with what they make, so tooltips and the Sell
+-- tab know your crafts while the window is closed, on any of your characters.
+local function SaveLearned(ids)
+    for _, id in ipairs(ids) do
+        local info = not saved[id] and Call(C_TradeSkillUI.GetRecipeInfo, id)
+        if info and info.learned then
+            saved[id] = true
+            local recipe = Prof:ReadRecipe(id)
+            if recipe and recipe.itemID and #recipe.reagents > 0 then
+                addon.db.recipes[recipe.itemID] = { reagents = recipe.reagents, yield = recipe.yield }
+            end
+        end
+    end
+end
+
 local function Rebuild()
     openRecipes = nil
     if windowOpen then
@@ -29,6 +48,7 @@ local function Rebuild()
         if type(ids) == "table" and #ids > 0 then
             openRecipes = {}
             for _, id in ipairs(ids) do openRecipes[id] = true end
+            SaveLearned(ids)
         end
     end
     addon:Refresh()
@@ -106,11 +126,36 @@ end
 -- Crafting
 --------------------------------------------------------------------------------
 
--- Whether an entry can be crafted now, and if not, why ("open Alchemy first").
+-- The spell that opens a profession's window: its own name, but Smelting
+-- for Mining where the game has it. Nil when this character knows none.
+local OPEN_SPELLS = { Mining = { "Smelting", "Mining" } }
+
+local function KnowsSpell(name)
+    if C_Spell and C_Spell.GetSpellInfo then return C_Spell.GetSpellInfo(name) ~= nil end
+    return true
+end
+
+local function OpenSpell(prof)
+    for _, name in ipairs(OPEN_SPELLS[prof] or { prof }) do
+        if KnowsSpell(name) then return name end
+    end
+end
+
+local function OpenProfessionName()
+    local info = Call(C_TradeSkillUI.GetBaseProfessionInfo)
+    return info and info.professionName
+end
+
+-- Whether an entry can be crafted now. If not: why ("open Alchemy first"),
+-- and the spell that opens its profession when that is all it takes.
 function Prof:CraftState(entry)
     if not entry.recipeID then return false, "not a recipe" end
     if not openRecipes or not openRecipes[entry.recipeID] then
-        return false, ("open %s first"):format(entry.prof or "its profession")
+        -- Its own profession is open without it: this character lacks it.
+        if openRecipes and entry.prof and OpenProfessionName() == entry.prof then
+            return false, "recipe not learned"
+        end
+        return false, ("open %s first"):format(entry.prof or "its profession"), entry.prof and OpenSpell(entry.prof)
     end
     local info = Call(C_TradeSkillUI.GetRecipeInfo, entry.recipeID)
     if info and info.learned == false then return false, "recipe not learned" end

@@ -72,34 +72,11 @@ end
 -- Rows
 --------------------------------------------------------------------------------
 
-local function AddTo(list, itemID)
-    local _, added = addon:AddItem(list, itemID)
-    addon:SetStatus(("%s %s %s"):format(addon:ItemName(itemID) or "Item",
-        added and "added to" or "is already on", list.name))
-end
-
-local function ShowMenu(row, itemID)
-    MenuUtil.CreateContextMenu(row, function(_, root)
-        root:CreateTitle(addon:ItemName(itemID) or "")
-        root:CreateButton("Search", function()
-            addon:Select({ itemID = itemID }, "buy")
-            addon.Auction:Search(itemID)
-        end):SetEnabled(addon.Auction.isOpen)
-        local add = root:CreateButton("Add to list")
-        for _, list in ipairs(addon.db.lists) do
-            add:CreateButton(list.name, function() AddTo(list, itemID) end)
-        end
-        add:CreateButton("New list...", function()
-            addon:Prompt("Name of the new list:", "", function(name) AddTo(addon:NewList(name), itemID) end)
-        end)
-    end)
-end
-
 local function OnRowClick(row, button)
     local itemID = row.data and row.data.itemID
     if not itemID then return end
     if button == "RightButton" then
-        ShowMenu(row, itemID)
+        addon:ShowItemMenu(row, itemID)
     elseif not UI.ModifiedClick(itemID) then
         -- At the auction house the Buy tab shows it.
         addon:Select({ itemID = itemID }, "buy")

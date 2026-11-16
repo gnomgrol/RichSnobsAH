@@ -1,7 +1,7 @@
 -- The left side of the window: every list as a section you can fold, its
--- crafts and items as rows of numbers, and reagents under each craft.
--- Right-click a row for its actions; drag rows to reorder them; drop an
--- item from your bags to add it.
+-- crafts and items as rows of numbers, and reagents under each craft, shown
+-- by clicking it. Right-click a row for its actions; drag rows to reorder
+-- them; drop an item from your bags to add it.
 
 local _, addon = ...
 local UI = addon.UI
@@ -16,14 +16,13 @@ local WHITE = { 1, 1, 1 }
 local GRAY = { 0.5, 0.5, 0.5 }
 local GREEN = { 0.25, 0.9, 0.25 }
 local RED = { 1, 0.3, 0.3 }
-local YELLOW = { 1, 0.85, 0.2 }
 
 local COLUMNS = {
     { key = "have", label = "Have", width = 50, tip = "In your bags. Reagents of a planned craft: in bags / needed" },
     { key = "listed", label = "Listed", width = 42, tip = "On the auction house, all your characters, as of today's visits" },
     { key = "craft", label = "Craft", width = 40, tip = "Crafts the reagents in your bags allow" },
     { key = "cost", label = "Cost", width = 64, tip = "Craft cost per item; gray if a reagent has no price yet" },
-    { key = "price", label = "Price", width = 64, tip = "Cheapest auction last seen; yellow is a vendor price" },
+    { key = "price", label = "Price", width = 64, tip = "Cheapest auction last seen; for a reagent, a vendor's price when lower" },
     { key = "profit", label = "Profit", width = 64, tip = "Price minus the 5% cut and the cost" },
 }
 
@@ -120,9 +119,7 @@ local function DropCursorItem(data)
     ClearCursor()
     local list = (data and data.list) or (addon.selected and addon.selected.list) or addon.db.lists[1]
         or addon:NewList("New list")
-    local _, added = addon:AddItem(list, itemID)
-    addon:SetStatus(("%s %s %s"):format(addon:ItemName(itemID) or "Item",
-        added and "added to" or "is already on", list.name))
+    UI.AddToList(list, itemID)
     return true
 end
 
@@ -137,8 +134,27 @@ local function HasStoredAmounts(list)
     return false
 end
 
+-- Opens or closes the reagents of every craft on a list; opening them also
+-- opens the list.
+local function SetAllExpanded(list, expanded)
+    if expanded then list.collapsed = nil end
+    for _, entry in ipairs(list.entries) do
+        if entry.reagents and #entry.reagents > 0 then entry.expanded = expanded or nil end
+    end
+    addon:Refresh()
+end
+
 local function ListMenu(root, list)
+    local open, closed = 0, 0
+    for _, entry in ipairs(list.entries) do
+        if entry.reagents and #entry.reagents > 0 then
+            if entry.expanded then open = open + 1 else closed = closed + 1 end
+        end
+    end
     root:CreateTitle(list.name)
+    root:CreateButton("Expand all", function() SetAllExpanded(list, true) end)
+        :SetEnabled(closed > 0 or (list.collapsed and open > 0) or false)
+    root:CreateButton("Collapse all", function() SetAllExpanded(list, false) end):SetEnabled(open > 0)
     root:CreateButton("Check prices", function()
         addon.Auction:ScanPrices(addon:ListItemIDs(list), list.name)
     end):SetEnabled(addon.Auction.isOpen and not addon.Auction:IsScanning())
@@ -213,6 +229,11 @@ local function EntryMenu(root, data)
         root:CreateButton(can and UI.CraftLabel(count, planned) or ("Craft: %s"):format(why), function()
             addon.Prof:Craft(entry, count)
         end):SetEnabled(can and count > 0)
+        if can then
+            local all = addon:CraftableCount(entry) or 0
+            root:CreateButton(("Craft all (%d)"):format(all), function() addon.Prof:Craft(entry, all) end)
+                :SetEnabled(all > 0)
+        end
         UI.AddPlanButtons(root, entry)
     end
     if #addon.db.lists > 1 then
@@ -339,6 +360,9 @@ local function OnRowClick(row, button)
         Toggle(data)
     elseif not UI.ModifiedClick(data.itemID) then
         addon:Select(Selection(data))
+        -- A click on a craft also opens or closes its reagents.
+        local reagents = data.kind == "entry" and data.entry.reagents
+        if reagents and #reagents > 0 then Toggle(data) end
     end
 end
 
@@ -448,12 +472,7 @@ local function UpdateRow(row, data)
     end
 
     local left = kind == "reagent" and 2 * INDENT or INDENT
-    if kind == "entry" and entry.reagents and #entry.reagents > 0 then
-        row.toggle:SetNormalTexture(entry.expanded and MINUS or PLUS)
-        row.toggle:SetPoint("LEFT", left + 4, 0)
-        row.toggle:Show()
-    end
-    row.icon:SetPoint("LEFT", left + 22, 0)
+    row.icon:SetPoint("LEFT", left + 4, 0)
     row.icon:Show()
     row.name:SetPoint("LEFT", row.icon, "RIGHT", 4, 0)
     row.name:SetPoint("RIGHT", row.cells.have, "LEFT", -4, 0)
@@ -486,8 +505,8 @@ local function UpdateRow(row, data)
     else
         SetCount(row, "have", have)
     end
-    local price, source = addon:BuyPrice(reagent.itemID)
-    if price then SetCell(row, "price", addon.Money(price), source == "vendor" and YELLOW or WHITE) end
+    local price = addon:BuyPrice(reagent.itemID)
+    if price then SetCell(row, "price", addon.Money(price)) end
     local craft = addon:Index().crafts[reagent.itemID]
     if craft and craft ~= entry then
         local cost, complete = addon:CraftCost(craft)
@@ -545,7 +564,7 @@ local function CreateHeaders(parent)
         headers[column.key] = button
     end
     local item = UI.Text(headers, "GameFontNormalSmall")
-    item:SetPoint("LEFT", INDENT + 22, 0)
+    item:SetPoint("LEFT", INDENT + 4, 0)
     item:SetText("Item")
     return headers
 end
@@ -569,22 +588,29 @@ local function SelectedCraft()
     if entry and entry.recipeID then return entry end
 end
 
--- Whether the selected craft can go now, how many of how many planned, and
--- if not, why.
+-- Whether the selected craft can go now, how many of how many planned; if
+-- not, why, and the spell that opens its profession when that would do.
 local function CraftButtonState()
     local entry = SelectedCraft()
     if not entry then return false, 0, 0, "Select a craft in your list" end
-    local can, why = addon.Prof:CraftState(entry)
+    local can, why, spell = addon.Prof:CraftState(entry)
     local count, planned = addon:CraftBatch(entry)
-    if not can then return false, count, planned, (why:gsub("^%l", string.upper)) end
+    if not can then return false, count, planned, (why:gsub("^%l", string.upper)), spell end
     if count == 0 then return false, 0, planned, "Not enough reagents in your bags" end
     return true, count, planned
 end
 
+-- Craft opens the profession while its window is closed; Craft all crafts
+-- everything the bags allow, plan or not.
 local function UpdateCraft()
-    local can, count, planned = CraftButtonState()
-    pane.craft:SetText(can and UI.CraftLabel(count, planned) or "Craft")
-    pane.craft:SetEnabled(can)
+    local entry = SelectedCraft()
+    local can, count, planned, _, spell = CraftButtonState()
+    pane.craft:SetOpens(not can and spell or nil)
+    pane.craft:SetText(can and UI.CraftLabel(count, planned) or spell and ("Open " .. entry.prof) or "Craft")
+    pane.craft:SetEnabled(can or spell ~= nil)
+    local all = can and addon:CraftableCount(entry) or 0
+    pane.craftAll:SetText(all > 0 and ("Craft all (%d)"):format(all) or "Craft all")
+    pane.craftAll:SetEnabled(all > 0)
 end
 
 function UI.CreateListPane(parent)
@@ -613,24 +639,37 @@ function UI.CreateListPane(parent)
     pane.scanAll:SetScript("OnLeave", GameTooltip_Hide)
     pane.scanAll:SetMotionScriptsWhileDisabled(true)
 
-    pane.craft = UI.Button(pane, "Craft", 120, 26)
-    pane.craft:SetPoint("LEFT", pane.scanAll, "RIGHT", 6, 0)
-    pane.craft:SetScript("OnClick", function()
+    pane.craft = UI.CraftButton(pane, 120, function()
         local entry = SelectedCraft()
         if entry then addon.Prof:Craft(entry, (addon:CraftBatch(entry))) end
     end)
+    pane.craft:SetPoint("LEFT", pane.scanAll, "RIGHT", 6, 0)
     pane.craft:SetScript("OnEnter", function(self)
         local entry = SelectedCraft()
-        local can, count, planned, why = CraftButtonState()
+        local can, count, planned, why, spell = CraftButtonState()
         if can then
             why = count < planned and ("Your bags have reagents for %d of the %d planned"):format(count, planned)
                 or planned == 0 and "One craft, since none is planned; plan more in the craft's menu"
                 or "Each finished craft takes one off the plan"
+        elseif spell then
+            why = ("Opens %s"):format(entry.prof)
         end
         UI.Tooltip(self, entry and addon:EntryName(entry) or "Craft", why)
     end)
     pane.craft:SetScript("OnLeave", GameTooltip_Hide)
     pane.craft:SetMotionScriptsWhileDisabled(true)
+
+    pane.craftAll = UI.Button(pane, "Craft all", 104, 26)
+    pane.craftAll:SetPoint("LEFT", pane.craft, "RIGHT", 6, 0)
+    pane.craftAll:SetScript("OnClick", function()
+        local entry = SelectedCraft()
+        if entry then addon.Prof:Craft(entry, addon:CraftableCount(entry) or 0) end
+    end)
+    pane.craftAll:SetScript("OnEnter", function(self)
+        UI.Tooltip(self, "Craft all", "As many as the reagents in your bags allow, plan or not")
+    end)
+    pane.craftAll:SetScript("OnLeave", GameTooltip_Hide)
+    pane.craftAll:SetMotionScriptsWhileDisabled(true)
 
     pane.scrollBox = CreateFrame("Frame", nil, pane, "WowScrollBoxList")
     pane.scrollBar = CreateFrame("EventFrame", nil, pane, "MinimalScrollBar")

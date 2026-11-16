@@ -72,7 +72,8 @@ end
 
 local GOLD, SILVER, COPPER = "|cffffd100g|r", "|cffc7c7cfs|r", "|cffeda55fc|r"
 
--- "12g 34s" by default; exact adds the copper a gold price usually hides.
+-- "12g 04s" by default; exact adds the copper a gold price usually hides.
+-- A unit after a larger one has two digits, so the numbers line up.
 function addon.Money(copper, exact)
     if not copper then return "" end
     copper = math.floor(copper + 0.5)
@@ -82,11 +83,11 @@ function addon.Money(copper, exact)
     local text
     if g > 0 then
         text = BreakUpLargeNumbers(g) .. GOLD
-        if s > 0 or (exact and c > 0) then text = text .. " " .. s .. SILVER end
-        if exact and c > 0 then text = text .. " " .. c .. COPPER end
+        if s > 0 or (exact and c > 0) then text = text .. (" %02d"):format(s) .. SILVER end
+        if exact and c > 0 then text = text .. (" %02d"):format(c) .. COPPER end
     elseif s > 0 then
         text = s .. SILVER
-        if c > 0 then text = text .. " " .. c .. COPPER end
+        if c > 0 then text = text .. (" %02d"):format(c) .. COPPER end
     else
         text = c .. COPPER
     end

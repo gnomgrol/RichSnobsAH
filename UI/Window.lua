@@ -1,6 +1,7 @@
--- The one window: your lists, the craft queue or the price lookup on the
--- left; Buy, Sell and My auctions on the right while the auction house is
--- open, docked to the right edge of Blizzard's auction frame at its height.
+-- The one window: your lists, the craft queue, the price lookup or your
+-- sales on the left; Buy, Sell and My auctions on the right while the
+-- auction house is open, docked to the right edge of Blizzard's auction
+-- frame at its height.
 -- Away from the auction house it shows the left side alone and can be moved.
 
 local _, addon = ...
@@ -28,8 +29,10 @@ local function Docked()
     return addon.Auction.isOpen and AuctionHouseFrame and AuctionHouseFrame:IsShown()
 end
 
+-- The craft buttons are secure, which keeps the window from moving or
+-- hiding in combat; it closes when combat starts anyway.
 local function Layout()
-    if not frame then return end
+    if not frame or InCombatLockdown() then return end
     local docked = Docked()
     frame:ClearAllPoints()
     if docked then
@@ -61,6 +64,7 @@ local function ShowLeftTab(index)
     frame.list:SetShown(index == 1)
     frame.queue:SetShown(index == 2)
     frame.prices:SetShown(index == 3)
+    frame.sales:SetShown(index == 4)
     if index == 3 and frame:IsShown() then frame.prices.search:SetFocus() end
 end
 
@@ -112,11 +116,12 @@ local function Create()
     frame.list = UI.CreateListPane(frame.left)
     frame.queue = UI.CreateQueuePane(frame.left)
     frame.prices = UI.CreatePricesPane(frame.left)
-    for _, pane in ipairs({ frame.list, frame.queue, frame.prices }) do
+    frame.sales = UI.CreateSalesPane(frame.left)
+    for _, pane in ipairs({ frame.list, frame.queue, frame.prices, frame.sales }) do
         pane:SetPoint("TOPLEFT", 0, -30)
         pane:SetPoint("BOTTOMRIGHT")
     end
-    frame.leftTabs = UI.Tabs(leftTabBar, { "Lists", "Queue", "Prices" }, ShowLeftTab)
+    frame.leftTabs = UI.Tabs(leftTabBar, { "Lists", "Queue", "Prices", "Sales" }, ShowLeftTab)
     frame.leftTabs:Select(1)
 
     frame.right = CreateFrame("Frame", nil, frame, "InsetFrameTemplate")
@@ -198,7 +203,27 @@ end
 
 addon:Listen("STATUS", UpdateStatus)
 
-local function AddAuctionHouseButton()
+-- Alt-click any item, in your bags, a chat link, a profession window or the
+-- auction house's list, for its menu: search for it, or add it to a list.
+-- Alt alone, so Alt with Shift or Ctrl stays free for other addons.
+local function AltClicked()
+    return IsAltKeyDown() and not IsShiftKeyDown() and not IsControlKeyDown()
+end
+
+-- A menu closes when its owner hides, and the auction house hides the list
+-- you clicked in, so these menus belong to UIParent.
+local function OpenItemMenu(itemID)
+    if itemID and addon.db then addon:ShowItemMenu(UIParent, itemID) end
+end
+
+if HandleModifiedItemClick then
+    hooksecurefunc("HandleModifiedItemClick", function(link)
+        if AltClicked() and type(link) == "string" then OpenItemMenu((C_Item.GetItemInfoInstant(link))) end
+    end)
+end
+
+-- Made on the first visit, when Blizzard's auction frame exists.
+local function SetUpAuctionHouse()
     if auctionHouseButton or not AuctionHouseFrame then return end
     auctionHouseButton = UI.IconButton(AuctionHouseFrame, 30, { icon = "Interface\\Icons\\INV_Misc_Coin_02" },
         "RichSnobsAH", "Show your lists", function()
@@ -207,6 +232,14 @@ local function AddAuctionHouseButton()
         end)
     auctionHouseButton:SetPoint("TOPLEFT", AuctionHouseFrame, "TOPRIGHT", 2, -40)
     UpdateAuctionHouseButton()
+
+    -- Its list passes on only Shift- and Ctrl-clicks; an Alt-click opens the
+    -- item like a plain click, and the menu comes along.
+    if type(AuctionHouseFrame.SelectBrowseResult) == "function" then
+        hooksecurefunc(AuctionHouseFrame, "SelectBrowseResult", function(_, result)
+            if AltClicked() and result and result.itemKey then OpenItemMenu(result.itemKey.itemID) end
+        end)
+    end
 end
 
 -- The auction frame opens with the window docked beside it, and closes it
@@ -214,7 +247,7 @@ end
 -- layout waits a frame for it.
 addon:Listen("AH_SHOW", function()
     C_Timer.After(0, function()
-        AddAuctionHouseButton()
+        SetUpAuctionHouse()
         if not frame or not frame:IsShown() then
             addon:ShowWindow()
             openedForAuctionHouse = frame ~= nil and frame:IsShown()
@@ -224,22 +257,10 @@ addon:Listen("AH_SHOW", function()
 end)
 
 addon:Listen("AH_HIDE", function()
-    if not frame then return end
+    if not frame or InCombatLockdown() then return end
     if openedForAuctionHouse then
         frame:Hide()
     else
         Layout()
     end
 end)
-
--- Alt-click any item, in bags, chat or a profession window, to look it up
--- in the Buy tab.
-if HandleModifiedItemClick then
-    hooksecurefunc("HandleModifiedItemClick", function(link)
-        if not IsAltKeyDown() or not addon.Auction.isOpen or type(link) ~= "string" then return end
-        local itemID = C_Item.GetItemInfoInstant(link)
-        if not itemID then return end
-        addon:ShowWindow()
-        addon:Select({ itemID = itemID }, "buy")
-    end)
-end

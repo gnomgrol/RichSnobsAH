@@ -232,7 +232,7 @@ function UI.CreateSellPane(parent)
         local deposit = itemID and quantity > 0 and Auction:Deposit(itemID, location, commodity, addon.db.duration, quantity)
         self.deposit:SetText(deposit and addon.Money(deposit, true) or "")
 
-        local craft = itemID and addon:Index().crafts[itemID]
+        local craft = addon:CraftFor(itemID)
         local cost, complete
         if craft then cost, complete = addon:CraftCost(craft) end
         if cost and complete and unit > 0 and quantity > 0 then

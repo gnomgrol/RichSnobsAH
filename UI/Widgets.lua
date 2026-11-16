@@ -29,6 +29,30 @@ function UI.ItemLink(itemID)
     return itemID and select(2, C_Item.GetItemInfo(itemID))
 end
 
+-- A button that crafts, or opens the profession a craft needs: SetOpens
+-- (spell) makes the click cast that spell, SetOpens(nil) makes it craft.
+-- Only a secure button may cast it. Its attributes can't change in combat,
+-- when the window is closed anyway.
+function UI.CraftButton(parent, width, onCraft)
+    local button = CreateFrame("Button", nil, parent, "SecureActionButtonTemplate, UIPanelButtonTemplate")
+    button:SetSize(width, 26)
+    button:SetText("Craft")
+    -- An addon's secure button acts on mouse down while "cast on key down"
+    -- is on, which it is by default; this one acts on release, as it crafts.
+    button:RegisterForClicks("LeftButtonUp")
+    button:SetAttribute("useOnKeyDown", false)
+    -- Runs after the secure click, which does nothing while there is no spell.
+    button:SetScript("PostClick", function(self)
+        if not self:GetAttribute("spell") then onCraft() end
+    end)
+    function button:SetOpens(spell)
+        if InCombatLockdown() or self:GetAttribute("spell") == spell then return end
+        self:SetAttribute("type", spell and "spell" or nil)
+        self:SetAttribute("spell", spell)
+    end
+    return button
+end
+
 -- Shift-click links the item in chat, Ctrl-click previews it, as anywhere.
 function UI.ModifiedClick(itemID)
     local link = UI.ItemLink(itemID)
@@ -136,11 +160,7 @@ function UI.ItemHeader(parent)
     header.add:SetPoint("RIGHT")
     header.add:SetScript("OnClick", function(self)
         local itemID = header.itemID
-        addon:ShowListPicker(self, "Add to list", function(list)
-            local _, added = addon:AddItem(list, itemID)
-            addon:SetStatus(("%s %s %s"):format(addon:ItemName(itemID) or "Item",
-                added and "added to" or "is already on", list.name))
-        end)
+        addon:ShowListPicker(self, "Add to list", function(list) UI.AddToList(list, itemID) end)
     end)
     header.add:SetScript("OnEnter", function(self) UI.Tooltip(self, "Add to a list") end)
     header.add:SetScript("OnLeave", GameTooltip_Hide)
@@ -170,8 +190,19 @@ end
 
 local ROW = 16
 
--- A commodity shows unit price and how many; an item auction shows price
--- and time left. With onSelect, item rows can be picked.
+-- Exact for your own auctions; others' come as Blizzard's bands, Short to
+-- Very Long, shown as its own list shows them.
+local function TimeLeft(data)
+    if data.timeLeft then return addon.Age(data.timeLeft) end
+    if data.band and AuctionHouseUtil and AuctionHouseUtil.GetTimeLeftBandText then
+        return AuctionHouseUtil.GetTimeLeftBandText(data.band)
+    end
+    return ""
+end
+
+-- A commodity shows unit price and how many. An item auction shows its
+-- price and time left, and "x7" when seven identical ones share the row.
+-- With onSelect, item rows can be picked.
 function UI.Ladder(parent, rowCount, onSelect)
     local ladder = CreateFrame("Frame", nil, parent)
     ladder:SetHeight(ROW * (rowCount + 1) + 4)
@@ -200,6 +231,7 @@ function UI.Ladder(parent, rowCount, onSelect)
         row.right:SetPoint("RIGHT", -4, 0)
         row.note = UI.Text(row, "GameFontDisableSmall", "RIGHT")
         row.note:SetPoint("RIGHT", -70, 0)
+        row.price:SetPoint("RIGHT", row.note, "LEFT", -4, 0)
         row:SetScript("OnClick", function(self)
             if onSelect and self.data then onSelect(self.data) end
         end)
@@ -216,13 +248,16 @@ function UI.Ladder(parent, rowCount, onSelect)
             row.data = data
             row:SetShown(data and true or false)
             if data then
-                row.price:SetText(addon.Money(data.unit, true))
+                local note = data.own and "|cff66bbffyours|r" or ""
                 if commodity then
+                    row.price:SetText(addon.Money(data.unit, true))
                     row.right:SetText(BreakUpLargeNumbers(data.quantity))
                 else
-                    row.right:SetText(data.timeLeft and addon.Age(data.timeLeft) or "")
+                    row.price:SetText(addon.Money(data.buyout, true))
+                    row.right:SetText(TimeLeft(data))
+                    if not data.own and data.quantity > 1 then note = ("x%d"):format(data.quantity) end
                 end
-                row.note:SetText(data.own and "|cff66bbffyours|r" or "")
+                row.note:SetText(note)
                 row.selection:SetShown(selected ~= nil and data == selected)
             end
         end
@@ -234,6 +269,37 @@ end
 --------------------------------------------------------------------------------
 -- Menus and prompts
 --------------------------------------------------------------------------------
+
+-- Adds an item to a list and says so: on the status line, and at the top
+-- of the screen while the window is closed.
+function UI.AddToList(list, itemID)
+    local _, added = addon:AddItem(list, itemID)
+    local text = ("%s %s %s"):format(addon:ItemName(itemID) or "Item", added and "added to" or "is already on",
+        list.name)
+    addon:SetStatus(text)
+    if not (addon.window and addon.window:IsShown()) then UIErrorsFrame:AddMessage(text, 1, 0.82, 0) end
+end
+
+-- An item's menu: search for it at the auction house, or add it to a list.
+-- Alt-click on any item opens it too (Window.lua).
+function addon:ShowItemMenu(owner, itemID)
+    MenuUtil.CreateContextMenu(owner, function(_, root)
+        root:CreateTitle(addon:ItemName(itemID) or "")
+        root:CreateButton("Search", function()
+            addon:ShowWindow()
+            addon:Select({ itemID = itemID }, "buy")
+            addon.Auction:Search(itemID)
+        end):SetEnabled(addon.Auction.isOpen)
+        root:CreateDivider()
+        root:CreateTitle("Add to list")
+        for _, list in ipairs(addon.db.lists) do
+            root:CreateButton(list.name, function() UI.AddToList(list, itemID) end)
+        end
+        root:CreateButton("New list...", function()
+            addon:Prompt("Name of the new list:", "", function(name) UI.AddToList(addon:NewList(name), itemID) end)
+        end)
+    end)
+end
 
 -- A menu of your lists, plus a new one.
 function addon:ShowListPicker(owner, title, onPick)
