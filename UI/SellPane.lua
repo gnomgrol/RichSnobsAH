@@ -1,6 +1,7 @@
 -- The Sell tab: post the selected item at a price prefilled one step under
 -- the cheapest other seller, with the deposit and the profit after the cut.
--- Next steps through the items on your lists that are in your bags.
+-- Next steps through the items on your lists that are in your bags, except
+-- on lists marked not for sale.
 
 local _, addon = ...
 local UI = addon.UI
@@ -12,15 +13,18 @@ local GREEN = { 0.25, 0.9, 0.25 }
 local RED = { 1, 0.3, 0.3 }
 
 -- The next item on your lists, after current, that is in your bags and can
--- be sold.
+-- be sold. A list marked not for sale is skipped, but an item it shares with
+-- another list still comes up there.
 local function NextSellable(current)
     local candidates, seen = {}, {}
     for _, list in ipairs(addon.db.lists) do
-        for _, entry in ipairs(list.entries) do
-            local itemID = entry.itemID
-            if itemID and not seen[itemID] and addon:FindInBags(itemID, true) then
-                seen[itemID] = true
-                candidates[#candidates + 1] = { itemID = itemID, list = list, entry = entry }
+        if not list.notForSale then
+            for _, entry in ipairs(list.entries) do
+                local itemID = entry.itemID
+                if itemID and not seen[itemID] and addon:FindInBags(itemID, true) then
+                    seen[itemID] = true
+                    candidates[#candidates + 1] = { itemID = itemID, list = list, entry = entry }
+                end
             end
         end
     end
@@ -122,10 +126,12 @@ function UI.CreateSellPane(parent)
         if nextItem then
             addon:Select(nextItem, "sell")
         else
-            addon:SetStatus("Nothing on your lists is in your bags to sell")
+            addon:SetStatus("Nothing to sell from your lists is in your bags")
         end
     end)
-    pane.next:SetScript("OnEnter", function(self) UI.Tooltip(self, "Next", "The next item on your lists that is in your bags") end)
+    pane.next:SetScript("OnEnter", function(self)
+        UI.Tooltip(self, "Next", "The next item on your lists that is in your bags; lists not for sale are skipped")
+    end)
     pane.next:SetScript("OnLeave", GameTooltip_Hide)
 
     pane.post = UI.Button(pane, "Post", 160, 26)

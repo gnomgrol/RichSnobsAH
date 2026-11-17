@@ -1,5 +1,5 @@
 -- The auction house on Forever's retail-style C_AuctionHouse: price checks,
--- searches, buying, posting and your own auctions.
+-- searches, buying, your purchases, posting and your own auctions.
 --
 -- Searches wait their turn on the throttled channel. Buying, posting and
 -- canceling need a hardware event, so they run straight from a click and
@@ -527,6 +527,143 @@ addon:On("AUCTION_HOUSE_PURCHASE_COMPLETED", function(auctionID)
     addon:SetStatus(("Bought %s for %s"):format(addon:ItemName(buying.itemID) or "", addon.Money(buying.buyout)))
     Auction:Search(buying.itemID)
 end)
+
+--------------------------------------------------------------------------------
+-- Purchases
+--------------------------------------------------------------------------------
+
+-- Every buyout, from this addon or Blizzard's frame, is saved for good, for
+-- all your characters. The game's calls are hooked, since its events name
+-- neither the item nor the price. A bid isn't a purchase yet, and one that
+-- wins later isn't counted.
+local commodityBuy  -- the commodity purchase under way: { itemID, count, price, sent }
+local bought = {}   -- [auctionID] = an item buyout sent: { itemID, count, price }
+local purchaseStats -- [itemID] = { units, total, low, high }, built when first asked for
+
+local function Hook(name, fn)
+    if C_AuctionHouse[name] then hooksecurefunc(C_AuctionHouse, name, fn) end
+end
+
+local function SavePurchase(purchase)
+    table.insert(addon.db.purchases, {
+        t = time(),
+        itemID = purchase.itemID,
+        count = purchase.count,
+        price = purchase.price, -- the whole purchase
+        char = addon:CharKey(),
+    })
+    purchaseStats = nil
+    addon:Refresh()
+end
+
+-- A commodity purchase names the item and quantity as it starts, takes its
+-- price from the quote, and goes through with the confirm. A new quote
+-- replaces the price.
+Hook("StartCommoditiesPurchase", function(itemID, quantity)
+    commodityBuy = { itemID = itemID, count = quantity }
+end)
+
+addon:On("COMMODITY_PRICE_UPDATED", function(_, totalPrice)
+    if commodityBuy then commodityBuy.price = totalPrice end
+end)
+
+Hook("ConfirmCommoditiesPurchase", function(itemID, quantity)
+    if commodityBuy and commodityBuy.itemID == itemID and commodityBuy.count == quantity then
+        commodityBuy.sent = true
+    end
+end)
+
+addon:On("COMMODITY_PURCHASE_SUCCEEDED", function()
+    if commodityBuy and commodityBuy.sent and commodityBuy.price then SavePurchase(commodityBuy) end
+    commodityBuy = nil
+end)
+
+addon:On("COMMODITY_PURCHASE_FAILED", function()
+    if commodityBuy then commodityBuy.sent = nil end
+end)
+
+-- An item buyout names only the auction, so its item and price are looked
+-- up: in every result of the item searches either frame made, however far
+-- down the list; then in the rows this addon keeps, which may outlast the
+-- game's; then in your bids, which the Bids tab buys out; then in the game's
+-- own lookup, where the client has one. A bid of at least the buyout buys
+-- one item.
+local searchedKeys = {} -- item keys searched since the house opened, latest last
+
+local function RememberKey(itemKey)
+    if not (itemKey and itemKey.itemID) then return end
+    for i, key in ipairs(searchedKeys) do
+        if key.itemID == itemKey.itemID and key.itemLevel == itemKey.itemLevel
+            and key.itemSuffix == itemKey.itemSuffix and key.battlePetSpeciesID == itemKey.battlePetSpeciesID then
+            table.remove(searchedKeys, i)
+            break
+        end
+    end
+    searchedKeys[#searchedKeys + 1] = itemKey
+end
+
+addon:On("ITEM_SEARCH_RESULTS_UPDATED", RememberKey)
+addon:On("ITEM_SEARCH_RESULTS_ADDED", RememberKey)
+addon:On("AUCTION_HOUSE_CLOSED", function() wipe(searchedKeys) end)
+
+-- The auction's item ID and buyout, or nil if it can't be found.
+local function FindAuction(auctionID)
+    for i = #searchedKeys, 1, -1 do
+        local key = searchedKeys[i]
+        for j = 1, C_AuctionHouse.GetNumItemSearchResults(key) or 0 do
+            local result = C_AuctionHouse.GetItemSearchResultInfo(key, j)
+            if result and result.auctionID == auctionID then return key.itemID, result.buyoutAmount end
+        end
+    end
+    for itemID, result in pairs(Auction.results) do
+        for _, row in ipairs(result.rows) do
+            if row.auctionID == auctionID then return itemID, row.buyout end
+        end
+    end
+    for i = 1, C_AuctionHouse.GetNumBids and C_AuctionHouse.GetNumBids() or 0 do
+        local bid = C_AuctionHouse.GetBidInfo(i)
+        if bid and bid.auctionID == auctionID and bid.itemKey then return bid.itemKey.itemID, bid.buyoutAmount end
+    end
+    if C_AuctionHouse.GetAuctionInfoByID then
+        local ok, info = pcall(C_AuctionHouse.GetAuctionInfoByID, auctionID)
+        if ok and info and info.itemKey then return info.itemKey.itemID, info.buyoutAmount end
+    end
+end
+
+Hook("PlaceBid", function(auctionID, bidAmount)
+    local itemID, buyout = FindAuction(auctionID)
+    if itemID and buyout and buyout > 0 and bidAmount and bidAmount >= buyout then
+        bought[auctionID] = { itemID = itemID, count = 1, price = buyout }
+    end
+end)
+
+addon:On("AUCTION_HOUSE_PURCHASE_COMPLETED", function(auctionID)
+    local purchase = bought[auctionID]
+    if not purchase then return end
+    bought[auctionID] = nil
+    SavePurchase(purchase)
+end)
+
+-- An item's purchases: units bought, what they cost in all, and the lowest
+-- and highest price each. Nil if you never bought it.
+function addon:PurchaseStats(itemID)
+    if not purchaseStats then
+        purchaseStats = {}
+        for _, purchase in ipairs(self.db.purchases) do
+            local item = purchaseStats[purchase.itemID]
+            if not item then
+                item = { units = 0, total = 0 }
+                purchaseStats[purchase.itemID] = item
+            end
+            local each = purchase.price / purchase.count
+            item.units = item.units + purchase.count
+            item.total = item.total + purchase.price
+            item.low = math.min(item.low or each, each)
+            item.high = math.max(item.high or each, each)
+        end
+    end
+    return purchaseStats[itemID]
+end
 
 --------------------------------------------------------------------------------
 -- Posting

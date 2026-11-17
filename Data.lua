@@ -24,7 +24,8 @@ local LISTED_KEEP = 86400       -- a character's listed counts lapse after a day
 local function Defaults()
     return {
         schema = SCHEMA,
-        lists = {},        -- { name, collapsed, entries = { entry, ... } }
+        lists = {},        -- { name, collapsed, notForSale, entries = { entry, ... } };
+                           -- Next on the Sell tab skips a list marked notForSale
         prices = {},       -- [itemID] = { p = copper per unit, t = time() }
         vendor = {},       -- [itemID] = copper per unit, unlimited vendor supply
         commodity = {},    -- [itemID] = true for commodities, false for items
@@ -33,6 +34,8 @@ local function Defaults()
                            -- recipes make, saved from their profession windows
         sales = {},        -- { t, itemID, name, count, price, cut, cost, char }, oldest first,
                            -- kept for good; from the auction house's mail (Sales.lua)
+        purchases = {},    -- { t, itemID, count, price, char }, oldest first, kept for good;
+                           -- your buyouts at the auction house (Auction.lua)
         history = { days = {}, weeks = {} }, -- [itemID] = the item's daily and weekly
                            -- prices, each packed into a string (History.lua); kept for good
         minimap = { hide = false }, -- LibDBIcon's settings: hide, minimapPos

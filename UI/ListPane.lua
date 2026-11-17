@@ -162,6 +162,11 @@ local function ListMenu(root, list)
     root:CreateButton("Plan all stored amounts", function()
         addon:SetStatus(("%s: %d crafts planned"):format(list.name, addon:PlanList(list)))
     end):SetEnabled(HasStoredAmounts(list))
+    -- Next on the Sell tab skips this list's items, unless another list has them too.
+    root:CreateCheckbox("Not for sale", function() return list.notForSale == true end, function()
+        list.notForSale = not list.notForSale or nil
+        addon:Refresh()
+    end)
     root:CreateButton("Rename...", function()
         addon:Prompt(("New name for %s:"):format(list.name), list.name, function(name)
             addon:RenameList(list, name)
@@ -460,7 +465,9 @@ local function UpdateRow(row, data)
         row.name:SetFontObject("GameFontNormal")
         row.name:SetPoint("LEFT", row.toggle, "RIGHT", 4, 0)
         row.name:SetPoint("RIGHT", -4, 0)
-        row.name:SetText(("%s  |cff808080%d|r"):format(data.list.name, #data.list.entries))
+        local list = data.list
+        row.name:SetText(("%s  |cff808080%d%s|r"):format(list.name, #list.entries,
+            list.notForSale and "  not for sale" or ""))
         return
     end
 
