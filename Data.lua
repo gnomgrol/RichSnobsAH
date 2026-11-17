@@ -41,6 +41,8 @@ local function Defaults()
         minimap = { hide = false }, -- LibDBIcon's settings: hide, minimapPos
         duration = 2,      -- 1, 2, 3 = 2, 8, 24 hours
         -- lastFullScan = time() of the last whole-house snapshot, for its cooldown
+        -- window = where you moved the window, away from the auction house
+        -- auctionTab = true when the auction house last closed on this addon's tab
     }
 end
 

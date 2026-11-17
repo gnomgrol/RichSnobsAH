@@ -199,10 +199,7 @@ function UI.CreateQueuePane(parent)
 
     pane.scrollBox = CreateFrame("Frame", nil, pane, "WowScrollBoxList")
     pane.scrollBar = CreateFrame("EventFrame", nil, pane, "MinimalScrollBar")
-    pane.scrollBox:SetPoint("TOPLEFT", 4, -26)
-    pane.scrollBox:SetPoint("BOTTOMRIGHT", -16, 40)
-    pane.scrollBar:SetPoint("TOPLEFT", pane.scrollBox, "TOPRIGHT", 4, 0)
-    pane.scrollBar:SetPoint("BOTTOMLEFT", pane.scrollBox, "BOTTOMRIGHT", 4, 0)
+    UI.PlaceScrollList(pane.scrollBox, pane.scrollBar, -26, 40)
 
     pane.headers = CreateHeaders(pane)
     pane.headers:SetPoint("BOTTOMLEFT", pane.scrollBox, "TOPLEFT", 0, 4)

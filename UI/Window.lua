@@ -1,56 +1,35 @@
 -- The one window: your lists, the craft queue, the price lookup or your
--- sales on the left; Buy, Sell and My auctions on the right while the
--- auction house is open, docked to the right edge of Blizzard's auction
--- frame at its height.
--- Away from the auction house it shows the left side alone and can be moved.
+-- sales on the left; Buy, Sell and Cancel on the right; above them a bar
+-- with the status line and the Full Auction House Scan. At the auction
+-- house it all sits in a fourth tab of Blizzard's auction frame, after Buy,
+-- Sell and Auctions. Away from it, the left side is a window of its own that
+-- can be moved. Both show the same frames, moved to whichever is open.
 
 local _, addon = ...
 local UI = addon.UI
 
 local LEFT_WIDTH = 538 -- room for the list rows' indent
-local RIGHT_WIDTH = 262
-local HEIGHT = 480
-local DOCKED_WIDTH = 8 + LEFT_WIDTH + 6 + RIGHT_WIDTH + 8
-local UNDOCKED_WIDTH = 8 + LEFT_WIDTH + 8
+local WIDTH = 8 + LEFT_WIDTH + 8
+local HEIGHT = 488
 
-local frame
-local openedForAuctionHouse = false
+-- The panes start below the bar. In the auction frame the bar clears its
+-- portrait, the tab ends where Blizzard's own tabs end, above its money
+-- display, and the frame widens for the right side.
+local CONTENT_TOP = 58
+local PORTRAIT_WIDTH = 58
+local TAB_BOTTOM = 27
+local TAB_EXTRA_WIDTH = 200
 
--- An icon just outside the auction frame's right edge, where the window
--- docks, brings the window back after you closed it there. It is made on
--- the first visit and shows only while the window is closed.
-local auctionHouseButton
+local SCAN_TEXT = "Full Auction House Scan"
 
-local function UpdateAuctionHouseButton()
-    if auctionHouseButton then auctionHouseButton:SetShown(not (frame and frame:IsShown())) end
-end
+local frame          -- the window, away from the auction house
+local content        -- the panes and the status line, in the window or the tab
+local panel, mode    -- the auction frame's fourth tab and its display mode
+local reopenWindow = false -- the window was open when the auction house opened
+local panelHiddenAt  -- GetTime() when the tab last hid
 
-local function Docked()
-    return addon.Auction.isOpen and AuctionHouseFrame and AuctionHouseFrame:IsShown()
-end
-
--- The craft buttons are secure, which keeps the window from moving or
--- hiding in combat; it closes when combat starts anyway.
-local function Layout()
-    if not frame or InCombatLockdown() then return end
-    local docked = Docked()
-    frame:ClearAllPoints()
-    if docked then
-        -- Top and bottom follow the auction frame, so the two are one height.
-        frame:SetPoint("TOPLEFT", AuctionHouseFrame, "TOPRIGHT", 2, 0)
-        frame:SetPoint("BOTTOMLEFT", AuctionHouseFrame, "BOTTOMRIGHT", 2, 0)
-    else
-        local saved = addon.db.window
-        if saved then
-            frame:SetPoint(saved.point, UIParent, saved.relativePoint, saved.x, saved.y)
-        else
-            frame:SetPoint("CENTER")
-        end
-        frame:SetHeight(HEIGHT)
-    end
-    frame:SetWidth(docked and DOCKED_WIDTH or UNDOCKED_WIDTH)
-    frame.right:SetShown(docked)
-    frame.docked = docked
+local function AtAuctionHouse()
+    return panel ~= nil and addon.Auction.isOpen and AuctionHouseFrame:IsShown()
 end
 
 local function ShowTab(index)
@@ -65,7 +44,7 @@ local function ShowLeftTab(index)
     frame.queue:SetShown(index == 2)
     frame.prices:SetShown(index == 3)
     frame.sales:SetShown(index == 4)
-    if index == 3 and frame:IsShown() then frame.prices.search:SetFocus() end
+    if index == 3 and content:IsVisible() then frame.prices.search:SetFocus() end
 end
 
 local function UpdateStatus()
@@ -80,6 +59,41 @@ local function UpdateStatus()
     end
 end
 
+-- The house allows one full scan per 15 minutes; the button counts down.
+local function UpdateScanAll()
+    local wait = addon.Auction:FullScanWait()
+    local text = wait > 0 and ("%s (%d min)"):format(SCAN_TEXT, math.ceil(wait / 60)) or SCAN_TEXT
+    if frame.scanAll:GetText() ~= text then frame.scanAll:SetText(text) end
+    frame.scanAll:SetEnabled(addon.Auction.isOpen and wait == 0)
+end
+
+-- Puts the content in the window or the tab. Only the tab has the right side
+-- and the full scan. The craft buttons are secure, so the content can't move
+-- in combat. Returns whether it is in the container.
+local function MoveContent(container)
+    if InCombatLockdown() then return content:GetParent() == container end
+    local inTab = container == panel
+    content:SetParent(container)
+    content:SetFrameLevel(container:GetFrameLevel() + 1)
+    content:ClearAllPoints()
+    if inTab then
+        content:SetAllPoints()
+    else
+        content:SetPoint("TOPLEFT", 8, -CONTENT_TOP)
+        content:SetPoint("BOTTOMRIGHT", -8, 8)
+    end
+    frame.bar:SetPoint("BOTTOMLEFT", content, "TOPLEFT", inTab and PORTRAIT_WIDTH or 0, 7)
+    frame.right:SetShown(inTab)
+    frame.scanAll:SetShown(inTab)
+    if inTab then
+        frame.progress:SetPoint("RIGHT", frame.scanAll, "LEFT", -10, 0)
+    else
+        frame.progress:SetPoint("RIGHT", frame.bar, "RIGHT")
+    end
+    if panel then panel.note:SetShown(not inTab) end
+    return true
+end
+
 local function Create()
     frame = CreateFrame("Frame", "RichSnobsAHFrame", UIParent, "ButtonFrameTemplate")
     frame:Hide()
@@ -87,28 +101,72 @@ local function Create()
     ButtonFrameTemplate_HideButtonBar(frame)
     frame.Inset:Hide()
     frame:SetTitle("RichSnobsAH")
-    frame:SetSize(UNDOCKED_WIDTH, HEIGHT)
+    frame:SetSize(WIDTH, HEIGHT)
     frame:SetToplevel(true)
     frame:EnableMouse(true)
     frame:SetMovable(true)
     frame:SetClampedToScreen(true)
     if frame.SetDontSavePosition then frame:SetDontSavePosition(true) end
+    local saved = addon.db.window
+    if saved then
+        frame:SetPoint(saved.point, UIParent, saved.relativePoint, saved.x, saved.y)
+    else
+        frame:SetPoint("CENTER")
+    end
     frame:RegisterForDrag("LeftButton")
-    frame:SetScript("OnDragStart", function(self)
-        if not self.docked then self:StartMoving() end
-    end)
+    frame:SetScript("OnDragStart", function(self) self:StartMoving() end)
     frame:SetScript("OnDragStop", function(self)
-        -- Docked, the point is the dock's anchor, not a place to remember.
-        if self.docked then return end
         self:StopMovingOrSizing()
         local point, _, relativePoint, x, y = self:GetPoint()
         addon.db.window = { point = point, relativePoint = relativePoint, x = x, y = y }
     end)
     tinsert(UISpecialFrames, frame:GetName())
 
-    frame.left = CreateFrame("Frame", nil, frame, "InsetFrameTemplate")
-    frame.left:SetPoint("TOPLEFT", 8, -28)
-    frame.left:SetPoint("BOTTOMLEFT", 8, 30)
+    content = CreateFrame("Frame", nil, frame)
+
+    -- The bar over the panes. MoveContent places its left end, and the
+    -- progress bar's right end, for the window or the tab.
+    frame.bar = CreateFrame("Frame", nil, content)
+    frame.bar:SetHeight(22)
+    frame.bar:SetPoint("BOTTOMRIGHT", content, "TOPRIGHT", 0, 7)
+
+    -- Its right edge lines up with Blizzard's Search button on the Buy tab,
+    -- 12 px in from the frame's edge (the tab itself ends 5 px in).
+    frame.scanAll = UI.Button(frame.bar, SCAN_TEXT, 230, 22)
+    frame.scanAll:SetPoint("RIGHT", -7, 0)
+    frame.scanAll:SetScript("OnClick", function() addon.Auction:FullScan() end)
+    frame.scanAll:SetScript("OnEnter", function(self)
+        UI.Tooltip(self, SCAN_TEXT, "Prices every item on the auction house in one go; allowed once per 15 minutes")
+    end)
+    frame.scanAll:SetScript("OnLeave", GameTooltip_Hide)
+    frame.scanAll:SetMotionScriptsWhileDisabled(true)
+
+    frame.progress = CreateFrame("StatusBar", nil, frame.bar)
+    frame.progress:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
+    frame.progress:SetStatusBarColor(0.85, 0.7, 0.2)
+    frame.progress:SetMinMaxValues(0, 1)
+    frame.progress:SetSize(160, 10)
+    local background = frame.progress:CreateTexture(nil, "BACKGROUND")
+    background:SetAllPoints()
+    background:SetColorTexture(0, 0, 0, 0.5)
+    frame.progress:Hide()
+
+    frame.statusText = UI.Text(frame.bar, "GameFontHighlightSmall")
+    frame.statusText:SetPoint("LEFT", 2, 0)
+    frame.statusText:SetPoint("RIGHT", frame.progress, "LEFT", -10, 0)
+
+    -- The full scan's countdown ticks once a second while the bar shows.
+    local sinceTick = 0
+    frame.bar:SetScript("OnUpdate", function(_, elapsed)
+        sinceTick = sinceTick + elapsed
+        if sinceTick < 1 then return end
+        sinceTick = 0
+        UpdateScanAll()
+    end)
+
+    frame.left = CreateFrame("Frame", nil, content, "InsetFrameTemplate")
+    frame.left:SetPoint("TOPLEFT")
+    frame.left:SetPoint("BOTTOMLEFT")
     frame.left:SetWidth(LEFT_WIDTH)
     local leftTabBar = CreateFrame("Frame", nil, frame.left)
     leftTabBar:SetPoint("TOPLEFT", 6, -4)
@@ -124,13 +182,14 @@ local function Create()
     frame.leftTabs = UI.Tabs(leftTabBar, { "Lists", "Queue", "Prices", "Sales" }, ShowLeftTab)
     frame.leftTabs:Select(1)
 
-    frame.right = CreateFrame("Frame", nil, frame, "InsetFrameTemplate")
+    -- The right side takes the tab's width left over.
+    frame.right = CreateFrame("Frame", nil, content, "InsetFrameTemplate")
     frame.right:SetPoint("TOPLEFT", frame.left, "TOPRIGHT", 6, 0)
-    frame.right:SetPoint("BOTTOMLEFT", frame.left, "BOTTOMRIGHT", 6, 0)
-    frame.right:SetWidth(RIGHT_WIDTH)
+    frame.right:SetPoint("BOTTOMRIGHT")
     local tabBar = CreateFrame("Frame", nil, frame.right)
     tabBar:SetPoint("TOPLEFT", 6, -4)
-    tabBar:SetSize(RIGHT_WIDTH - 12, 24)
+    tabBar:SetPoint("TOPRIGHT", -6, -4)
+    tabBar:SetHeight(24)
     frame.buy = UI.CreateBuyPane(frame.right)
     frame.sell = UI.CreateSellPane(frame.right)
     frame.auctions = UI.CreateAuctionsPane(frame.right)
@@ -138,55 +197,43 @@ local function Create()
         pane:SetPoint("TOPLEFT", 0, -30)
         pane:SetPoint("BOTTOMRIGHT")
     end
-    frame.tabs = UI.Tabs(tabBar, { "Buy", "Sell", "My auctions" }, ShowTab)
+    frame.tabs = UI.Tabs(tabBar, { "Buy", "Sell", "Cancel" }, ShowTab)
     frame.tabs:Select(1)
 
-    frame.progress = CreateFrame("StatusBar", nil, frame)
-    frame.progress:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
-    frame.progress:SetStatusBarColor(0.85, 0.7, 0.2)
-    frame.progress:SetMinMaxValues(0, 1)
-    frame.progress:SetSize(160, 10)
-    frame.progress:SetPoint("BOTTOMRIGHT", -14, 11)
-    local background = frame.progress:CreateTexture(nil, "BACKGROUND")
-    background:SetAllPoints()
-    background:SetColorTexture(0, 0, 0, 0.5)
-    frame.progress:Hide()
+    MoveContent(frame)
 
-    frame.statusText = UI.Text(frame, "GameFontHighlightSmall")
-    frame.statusText:SetPoint("BOTTOMLEFT", 14, 10)
-    frame.statusText:SetPoint("RIGHT", frame.progress, "LEFT", -10, 0)
-
-    frame:SetScript("OnShow", function()
-        Layout()
+    frame:SetScript("OnShow", function() MoveContent(frame) end)
+    content:SetScript("OnShow", function()
         UpdateStatus()
-        UpdateAuctionHouseButton()
         addon:Refresh()
     end)
-    frame:SetScript("OnHide", function()
-        openedForAuctionHouse = false
-        addon.Auction:CancelQuote()
-        UpdateAuctionHouseButton()
-    end)
+    content:SetScript("OnHide", function() addon.Auction:CancelQuote() end)
 
-    addon.window = frame
+    addon.window = content
 end
 
+-- At the auction house, the window is the auction frame's tab.
 function addon:ShowWindow()
-    if InCombatLockdown() then return end
     if not frame then Create() end
-    frame:Show()
+    if AtAuctionHouse() then
+        AuctionHouseFrame:SetDisplayMode(mode)
+    elseif not InCombatLockdown() then
+        frame:Show()
+    end
 end
 
 function addon:Toggle()
-    if frame and frame:IsShown() then
-        frame:Hide()
+    if AtAuctionHouse() then
+        AuctionHouseFrame:SetDisplayMode(panel:IsShown() and AuctionHouseFrameDisplayMode.Buy or mode)
+    elseif frame and frame:IsShown() then
+        if not InCombatLockdown() then frame:Hide() end
     else
         self:ShowWindow()
     end
 end
 
 -- Shows an item in the right pane. tab: "buy" or "sell" switches to it;
--- otherwise My auctions gives way to Buy.
+-- otherwise Cancel gives way to Buy.
 function addon:Select(selection, tab)
     self.selected = selection
     if frame then
@@ -202,6 +249,9 @@ function addon:Select(selection, tab)
 end
 
 addon:Listen("STATUS", UpdateStatus)
+addon:Listen("REFRESH", function()
+    if frame then UpdateScanAll() end
+end)
 
 -- Alt-click any item, in your bags, a chat link, a profession window or the
 -- auction house's list, for its menu: search for it, or add it to a list.
@@ -222,16 +272,50 @@ if HandleModifiedItemClick then
     end)
 end
 
--- Made on the first visit, when Blizzard's auction frame exists.
+-- Made on the first visit, when Blizzard's auction frame exists. The tab is
+-- one of the frame's display modes, like its own three, so Blizzard's tab
+-- code shows and hides it.
 local function SetUpAuctionHouse()
-    if auctionHouseButton or not AuctionHouseFrame then return end
-    auctionHouseButton = UI.IconButton(AuctionHouseFrame, 30, { icon = "Interface\\Icons\\INV_Misc_Coin_02" },
-        "RichSnobsAH", "Show your lists", function()
-            addon:ShowWindow()
-            openedForAuctionHouse = frame ~= nil and frame:IsShown()
-        end)
-    auctionHouseButton:SetPoint("TOPLEFT", AuctionHouseFrame, "TOPRIGHT", 2, -40)
-    UpdateAuctionHouseButton()
+    if panel then return end
+    if not frame then Create() end
+
+    panel = CreateFrame("Frame", nil, AuctionHouseFrame)
+    panel:SetPoint("TOPLEFT", 4, -CONTENT_TOP)
+    panel:SetPoint("BOTTOMRIGHT", -5, TAB_BOTTOM)
+    panel:Hide()
+    panel.note = UI.Text(panel, "GameFontDisable", "CENTER")
+    panel.note:SetPoint("CENTER")
+    panel.note:SetText("Back after combat")
+    panel:SetScript("OnShow", function(self) self.note:SetShown(not MoveContent(self)) end)
+    panel:SetScript("OnHide", function() panelHiddenAt = GetTime() end)
+
+    mode = { "RichSnobsAHPanel" }
+    AuctionHouseFrame.RichSnobsAHPanel = panel
+    AuctionHouseFrameDisplayMode.RichSnobsAH = mode
+
+    local tab = CreateFrame("Button", nil, AuctionHouseFrame, "AuctionHouseFrameDisplayModeTabTemplate")
+    tab.displayMode = mode
+    tab:SetText("RichSnobs")
+    tab:SetPoint("LEFT", AuctionHouseFrame.AuctionsTab, "RIGHT", -15, 0)
+    -- The tab template joins the frame's Tabs itself.
+    local tabs = AuctionHouseFrame.Tabs
+    if not tIndexOf(tabs, tab) then tabs[#tabs + 1] = tab end
+    tab:SetID(#tabs)
+    AuctionHouseFrame.tabsForDisplayMode[mode] = #tabs
+    PanelTemplates_SetNumTabs(AuctionHouseFrame, #tabs)
+    PanelTemplates_TabResize(tab, 20, nil, 70)
+    PanelTemplates_UpdateTabs(AuctionHouseFrame)
+
+    hooksecurefunc(AuctionHouseFrame, "UpdateTitle", function(self)
+        if self.displayMode == mode then self:SetTitle("RichSnobsAH") end
+    end)
+
+    -- The tab widens the frame for the right side; Blizzard's tabs get the
+    -- frame's own width back.
+    local width = AuctionHouseFrame:GetWidth()
+    hooksecurefunc(AuctionHouseFrame, "SetDisplayMode", function(self)
+        self:SetWidth(width + (self.displayMode == mode and TAB_EXTRA_WIDTH or 0))
+    end)
 
     -- Its list passes on only Shift- and Ctrl-clicks; an Alt-click opens the
     -- item like a plain click, and the menu comes along.
@@ -240,27 +324,49 @@ local function SetUpAuctionHouse()
             if AltClicked() and result and result.itemKey then OpenItemMenu(result.itemKey.itemID) end
         end)
     end
+
+    -- A right-click on a bag item puts it in Blizzard's sell slot and switches
+    -- to Blizzard's sell view. When that took you off this tab, in this very
+    -- frame, the slot is emptied again, the tab comes back, and the item goes
+    -- to its Sell pane instead.
+    hooksecurefunc(AuctionHouseFrame, "SetPostItem", function(self, itemLocation)
+        if panelHiddenAt ~= GetTime() or not self:IsListingAuctions() then return end
+        self:ClearPostItem()
+        self:SetDisplayMode(mode)
+        if itemLocation and itemLocation:IsValid() and C_AuctionHouse.IsSellItemValid(itemLocation, false) then
+            addon:Select({ itemID = C_Item.GetItemID(itemLocation) }, "sell")
+        end
+    end)
 end
 
--- The auction frame opens with the window docked beside it, and closes it
--- again if it opened it. Blizzard's frame shows on the same event, so the
--- layout waits a frame for it.
+-- Blizzard's frame shows on the same event and opens on Buy, so this waits a
+-- frame. The window gives way to the tab, which opens when the window was
+-- open or the auction house last closed on it.
 addon:Listen("AH_SHOW", function()
     C_Timer.After(0, function()
+        if not AuctionHouseFrame then return end
         SetUpAuctionHouse()
-        if not frame or not frame:IsShown() then
-            addon:ShowWindow()
-            openedForAuctionHouse = frame ~= nil and frame:IsShown()
-        end
-        Layout()
+        reopenWindow = frame:IsShown()
+        if reopenWindow and not InCombatLockdown() then frame:Hide() end
+        if reopenWindow or addon.db.auctionTab then AuctionHouseFrame:SetDisplayMode(mode) end
     end)
 end)
 
 addon:Listen("AH_HIDE", function()
-    if not frame or InCombatLockdown() then return end
-    if openedForAuctionHouse then
-        frame:Hide()
-    else
-        Layout()
-    end
+    if panel then addon.db.auctionTab = AuctionHouseFrame.displayMode == mode or nil end
+    if reopenWindow and not InCombatLockdown() then frame:Show() end
+    reopenWindow = false
+end)
+
+-- The window closes when combat starts, as it always has. Before combat
+-- locks the secure craft buttons, the content also leaves the auction frame,
+-- whose tab then says it comes back after combat.
+addon:On("PLAYER_REGEN_DISABLED", function()
+    if not frame then return end
+    MoveContent(frame)
+    frame:Hide()
+end)
+
+addon:On("PLAYER_REGEN_ENABLED", function()
+    if panel and panel:IsShown() then MoveContent(panel) end
 end)

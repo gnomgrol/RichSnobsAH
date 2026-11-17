@@ -582,14 +582,6 @@ end
 -- The pane
 --------------------------------------------------------------------------------
 
--- The house allows one full scan per 15 minutes; the button counts down.
-local function UpdateScanAll()
-    local wait = addon.Auction:FullScanWait()
-    local text = wait > 0 and ("Scan everything (%d min)"):format(math.ceil(wait / 60)) or "Scan everything"
-    if pane.scanAll:GetText() ~= text then pane.scanAll:SetText(text) end
-    pane.scanAll:SetEnabled(addon.Auction.isOpen and wait == 0)
-end
-
 -- The Craft button works on the selected craft row, as its menu does.
 local function SelectedCraft()
     local selected = addon.selected
@@ -639,20 +631,11 @@ function UI.CreateListPane(parent)
     pane.check:SetScript("OnLeave", GameTooltip_Hide)
     pane.check:SetMotionScriptsWhileDisabled(true)
 
-    pane.scanAll = UI.Button(pane, "Scan everything", 170, 26)
-    pane.scanAll:SetPoint("LEFT", pane.check, "RIGHT", 6, 0)
-    pane.scanAll:SetScript("OnClick", function() addon.Auction:FullScan() end)
-    pane.scanAll:SetScript("OnEnter", function(self)
-        UI.Tooltip(self, "Scan everything", "Prices every item on the auction house in one go; allowed once per 15 minutes")
-    end)
-    pane.scanAll:SetScript("OnLeave", GameTooltip_Hide)
-    pane.scanAll:SetMotionScriptsWhileDisabled(true)
-
     pane.craft = UI.CraftButton(pane, 120, function()
         local entry = SelectedCraft()
         if entry then addon.Prof:Craft(entry, (addon:CraftBatch(entry))) end
     end)
-    pane.craft:SetPoint("LEFT", pane.scanAll, "RIGHT", 6, 0)
+    pane.craft:SetPoint("LEFT", pane.check, "RIGHT", 6, 0)
     pane.craft:SetScript("OnEnter", function(self)
         local entry = SelectedCraft()
         local can, count, planned, why, spell = CraftButtonState()
@@ -675,17 +658,14 @@ function UI.CreateListPane(parent)
         if entry then addon.Prof:Craft(entry, addon:CraftableCount(entry) or 0) end
     end)
     pane.craftAll:SetScript("OnEnter", function(self)
-        UI.Tooltip(self, "Craft all", "As many as the reagents in your bags allow, plan or not")
+        UI.Tooltip(self, "Craft all", "As many as the reagents in your bags allow")
     end)
     pane.craftAll:SetScript("OnLeave", GameTooltip_Hide)
     pane.craftAll:SetMotionScriptsWhileDisabled(true)
 
     pane.scrollBox = CreateFrame("Frame", nil, pane, "WowScrollBoxList")
     pane.scrollBar = CreateFrame("EventFrame", nil, pane, "MinimalScrollBar")
-    pane.scrollBox:SetPoint("TOPLEFT", 4, -26)
-    pane.scrollBox:SetPoint("BOTTOMRIGHT", -16, 40)
-    pane.scrollBar:SetPoint("TOPLEFT", pane.scrollBox, "TOPRIGHT", 4, 0)
-    pane.scrollBar:SetPoint("BOTTOMLEFT", pane.scrollBox, "BOTTOMRIGHT", 4, 0)
+    UI.PlaceScrollList(pane.scrollBox, pane.scrollBar, -26, 40)
 
     pane.headers = CreateHeaders(pane)
     pane.headers:SetPoint("BOTTOMLEFT", pane.scrollBox, "TOPLEFT", 0, 4)
@@ -704,15 +684,8 @@ function UI.CreateListPane(parent)
     dropZone:SetScript("OnReceiveDrag", function() DropCursorItem(nil) end)
     dropZone:SetScript("OnMouseUp", function() DropCursorItem(nil) end)
 
-    -- The full scan's countdown ticks once a second. While dragging a row, a
-    -- line marks where it will land.
-    local sinceTick = 0
-    pane:SetScript("OnUpdate", function(_, elapsed)
-        sinceTick = sinceTick + elapsed
-        if sinceTick >= 1 then
-            sinceTick = 0
-            UpdateScanAll()
-        end
+    -- While dragging a row, a line marks where it will land.
+    pane:SetScript("OnUpdate", function()
         if not pane.dragging then return end
         local over = RowUnderCursor()
         pane.scrollBox:ForEachFrame(function(frame)
@@ -724,7 +697,6 @@ function UI.CreateListPane(parent)
     function pane:Refresh()
         if not self:IsVisible() then return end
         self.check:SetEnabled(addon.Auction.isOpen and not addon.Auction:IsScanning())
-        UpdateScanAll()
         UpdateCraft()
         self.scrollBox:SetDataProvider(CreateDataProvider(BuildElements()), ScrollBoxConstants.RetainScrollPosition)
     end

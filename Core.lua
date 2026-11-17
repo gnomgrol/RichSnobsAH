@@ -59,7 +59,8 @@ end
 -- Output and formatting
 --------------------------------------------------------------------------------
 
--- Chat is for errors only; progress goes to the window's status line.
+-- Chat is for errors and the mailbox's summary of sales collected (Sales.lua);
+-- progress goes to the window's status line.
 function addon:Print(message)
     DEFAULT_CHAT_FRAME:AddMessage("|cffd4af37RichSnobsAH:|r " .. message)
 end
@@ -158,11 +159,8 @@ addon:On("PLAYER_LOGIN", function() addon:Fire("LOGIN") end)
 addon:On("GET_ITEM_INFO_RECEIVED", function() addon:Refresh() end)
 addon:On("ITEM_DATA_LOAD_RESULT", function() addon:Refresh() end)
 addon:On("BAG_UPDATE_DELAYED", function() addon:Refresh() end)
-
--- The window closes when combat starts, as it always has.
-addon:On("PLAYER_REGEN_DISABLED", function()
-    if addon.window and addon.window:IsShown() then addon.window:Hide() end
-end)
+-- A stack picked up and put back unlocks without a bag update.
+addon:On("ITEM_LOCK_CHANGED", function() addon:Refresh() end)
 
 SLASH_RICHSNOBSAH1 = "/rsah"
 SLASH_RICHSNOBSAH2 = "/richsnobs"

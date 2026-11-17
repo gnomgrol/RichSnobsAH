@@ -1,5 +1,5 @@
 -- The Sales tab: every sale, newest first, with what it brought in after
--- the house's cut and, for your crafts, the profit; income totals on top.
+-- the house's cut and, for your crafts, the profit; income totals below.
 -- Sales come from the mail as you take the gold (Sales.lua).
 
 local _, addon = ...
@@ -151,16 +151,9 @@ end
 function UI.CreateSalesPane(parent)
     pane = CreateFrame("Frame", nil, parent)
 
-    pane.totals = UI.Text(pane, "GameFontHighlight")
-    pane.totals:SetPoint("TOPLEFT", 12, -8)
-    pane.totals:SetPoint("TOPRIGHT", -8, -8)
-
     pane.scrollBox = CreateFrame("Frame", nil, pane, "WowScrollBoxList")
     pane.scrollBar = CreateFrame("EventFrame", nil, pane, "MinimalScrollBar")
-    pane.scrollBox:SetPoint("TOPLEFT", 4, -50)
-    pane.scrollBox:SetPoint("BOTTOMRIGHT", -16, 8)
-    pane.scrollBar:SetPoint("TOPLEFT", pane.scrollBox, "TOPRIGHT", 4, 0)
-    pane.scrollBar:SetPoint("BOTTOMLEFT", pane.scrollBox, "BOTTOMRIGHT", 4, 0)
+    UI.PlaceScrollList(pane.scrollBox, pane.scrollBar, -26, 40)
 
     pane.headers = CreateHeaders(pane)
     pane.headers:SetPoint("BOTTOMLEFT", pane.scrollBox, "TOPLEFT", 0, 4)
@@ -175,6 +168,11 @@ function UI.CreateSalesPane(parent)
     pane.message:SetWordWrap(true)
     pane.message:SetPoint("TOPLEFT", pane.scrollBox, "TOPLEFT", 0, -30)
     pane.message:SetPoint("TOPRIGHT", pane.scrollBox, "TOPRIGHT", 0, -30)
+
+    -- The income line sits under the list, level with the Lists tab's buttons.
+    pane.totals = UI.Text(pane, "GameFontHighlight")
+    pane.totals:SetPoint("LEFT", pane, "BOTTOMLEFT", 12, 21)
+    pane.totals:SetPoint("RIGHT", pane, "BOTTOMRIGHT", -8, 21)
 
     -- The whole log is gone through only when the tab opens and after a
     -- sale. Other redraws touch just the rows in view, and the scroll list

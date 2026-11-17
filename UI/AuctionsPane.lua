@@ -1,6 +1,7 @@
--- The My auctions tab: your auctions grouped as Undercut, Cheapest and Sold,
--- checked against the cheapest offers in one batched request, a cancel
--- button on each, and what the sold ones bring in after the cut.
+-- The Cancel tab: your auctions grouped as Undercut, Cheapest and Sold,
+-- checked against the cheapest offers in one batched request, then each
+-- undercut item searched for by how many and how much; a cancel button on
+-- each, and what the sold ones bring in after the cut, and when.
 
 local _, addon = ...
 local UI = addon.UI
@@ -17,11 +18,18 @@ local GROUPS = {
 
 local function GroupOf(auction)
     if auction.sold then return "sold" end
-    local cheapest = Auction.ownedMin[auction.itemID]
-    if not cheapest or not auction.unit then return "unchecked" end
-    -- Half a copper of slack for the per-unit price of multi-item auctions.
-    if cheapest < auction.unit - 0.5 then return "undercut" end
-    return "cheapest"
+    if not Auction.ownedMin[auction.itemID] or not auction.unit then return "unchecked" end
+    return Auction:UndercutBy(auction) and "undercut" or "cheapest"
+end
+
+-- "3 cheaper, by 1s 20c": how many are up for less than yours (auctions,
+-- or units of a commodity) and how far under it the cheapest is, each. The
+-- count comes once that item's own search is in.
+local function UndercutText(auction)
+    local by = "by " .. addon.Money(Auction:UndercutBy(auction), true)
+    local count, more = Auction:CheaperThan(auction)
+    if not count then return by end
+    return ("%s%s cheaper, %s"):format(BreakUpLargeNumbers(count), more and "+" or "", by)
 end
 
 local function ByName(a, b)
@@ -30,13 +38,37 @@ local function ByName(a, b)
     return a.auctionID < b.auctionID
 end
 
+-- What the sold auctions bring in after the cut, and the first and last time
+-- their gold is mailed, of those still to come that the game gave a time for.
+local function Incoming()
+    local money, first, last, now = 0, nil, nil, time()
+    for _, auction in ipairs(Auction.owned or {}) do
+        if auction.sold then
+            money = money + (auction.total or 0) * 0.95
+            local arrives = auction.arrives
+            if arrives and arrives > now then
+                first = math.min(first or arrives, arrives)
+                last = math.max(last or arrives, arrives)
+            end
+        end
+    end
+    return money, first, last
+end
+
+-- "in 12 min", or "in 3-58 min" when the payments are spread out.
+local function ArrivalText(first, last)
+    local soon, late = addon.Age(first), addon.Age(last)
+    if soon == late then return "in " .. soon end
+    if soon:match("%a+$") == late:match("%a+$") then return ("in %s-%s"):format(soon:match("^%d+"), late) end
+    return ("in %s to %s"):format(soon, late)
+end
+
 local function BuildElements()
-    local grouped, incoming = {}, 0
+    local grouped = {}
     for _, auction in ipairs(Auction.owned or {}) do
         local key = GroupOf(auction)
         grouped[key] = grouped[key] or {}
         table.insert(grouped[key], auction)
-        if auction.sold then incoming = incoming + (auction.total or 0) * 0.95 end
     end
     local elements = {}
     for _, group in ipairs(GROUPS) do
@@ -49,7 +81,7 @@ local function BuildElements()
             end
         end
     end
-    return elements, incoming
+    return elements
 end
 
 local function OnRowEnter(row)
@@ -65,6 +97,9 @@ local function OnRowEnter(row)
     end
     if auction.timeLeft and not auction.sold then
         GameTooltip:AddDoubleLine("Time left", addon.Age(auction.timeLeft), 1, 0.82, 0, 1, 1, 1)
+    end
+    if auction.sold and auction.arrives and auction.arrives > time() then
+        GameTooltip:AddDoubleLine("Gold arrives in", addon.Age(auction.arrives - time()), 1, 0.82, 0, 1, 1, 1)
     end
     GameTooltip:Show()
 end
@@ -119,10 +154,10 @@ local function UpdateRow(row, data)
     local name = addon:ItemName(auction.itemID) or "..."
     row.name:SetText(auction.quantity > 1 and ("%s x%d"):format(name, auction.quantity) or name)
 
-    -- Undercut rows show the price that beat yours; sold rows the whole sale,
+    -- Undercut rows show by how many and how much; sold rows the whole sale,
     -- as Blizzard's frame shows it. The cut comes off in the total below.
     if data.group.key == "undercut" then
-        row.price:SetText(addon.Money(Auction.ownedMin[auction.itemID]))
+        row.price:SetText(UndercutText(auction))
     elseif auction.sold then
         row.price:SetText(addon.Money(auction.total))
     else
@@ -139,10 +174,7 @@ function UI.CreateAuctionsPane(parent)
 
     pane.scrollBox = CreateFrame("Frame", nil, pane, "WowScrollBoxList")
     pane.scrollBar = CreateFrame("EventFrame", nil, pane, "MinimalScrollBar")
-    pane.scrollBox:SetPoint("TOPLEFT", 4, -4)
-    pane.scrollBox:SetPoint("BOTTOMRIGHT", -16, 62)
-    pane.scrollBar:SetPoint("TOPLEFT", pane.scrollBox, "TOPRIGHT", 4, 0)
-    pane.scrollBar:SetPoint("BOTTOMLEFT", pane.scrollBox, "BOTTOMRIGHT", 4, 0)
+    UI.PlaceScrollList(pane.scrollBox, pane.scrollBar, -4, 62)
     local view = CreateScrollBoxListLinearView()
     view:SetElementExtent(ROW_HEIGHT)
     view:SetElementInitializer("Button", UpdateRow)
@@ -151,21 +183,40 @@ function UI.CreateAuctionsPane(parent)
     pane.message = UI.Text(pane, "GameFontDisableSmall", "CENTER")
     pane.message:SetPoint("TOP", 0, -40)
 
-    pane.incomingLabel = UI.Text(pane, "GameFontHighlight")
-    pane.incomingLabel:SetText("Incoming after the cut")
-    pane.incomingLabel:SetPoint("BOTTOMLEFT", 10, 44)
     pane.incoming = UI.Text(pane, "GameFontHighlight", "RIGHT")
     pane.incoming:SetPoint("BOTTOMRIGHT", -10, 44)
+    pane.incomingLabel = UI.Text(pane, "GameFontHighlight")
+    pane.incomingLabel:SetPoint("BOTTOMLEFT", 10, 44)
+    pane.incomingLabel:SetPoint("RIGHT", pane.incoming, "LEFT", -6, 0)
 
     pane.refresh = UI.Button(pane, "Check again", 120, 26)
     pane.refresh:SetPoint("BOTTOMLEFT", 8, 8)
     pane.refresh:SetPoint("RIGHT", -8, 0)
     pane.refresh:SetScript("OnClick", function() Auction:QueryOwned(true) end)
 
+    local due
+    function pane:UpdateIncoming()
+        local money, first, last = Incoming()
+        local now = time()
+        due = first
+        self.incomingLabel:SetText(first and "Incoming " .. ArrivalText(first - now, last - now) or "Incoming")
+        self.incoming:SetText(addon.Money(money))
+    end
+
+    -- The countdown ticks once a second while the tab shows. When a payment
+    -- comes due, your auctions are asked for again so the mailed sale drops off.
+    local sinceTick = 0
+    pane:SetScript("OnUpdate", function(self, elapsed)
+        sinceTick = sinceTick + elapsed
+        if sinceTick < 1 then return end
+        sinceTick = 0
+        if due and time() >= due then Auction:QueryOwned() end
+        self:UpdateIncoming()
+    end)
+
     function pane:Refresh()
         if not self:IsVisible() then return end
-        local elements, incoming = BuildElements()
-        self.scrollBox:SetDataProvider(CreateDataProvider(elements), ScrollBoxConstants.RetainScrollPosition)
+        self.scrollBox:SetDataProvider(CreateDataProvider(BuildElements()), ScrollBoxConstants.RetainScrollPosition)
         if not Auction.owned then
             self.message:SetText("Loading your auctions...")
         elseif #Auction.owned == 0 then
@@ -173,7 +224,7 @@ function UI.CreateAuctionsPane(parent)
         else
             self.message:SetText("")
         end
-        self.incoming:SetText(addon.Money(incoming))
+        self:UpdateIncoming()
         self.refresh:SetEnabled(Auction:CanAct() and not Auction:IsScanning())
     end
 

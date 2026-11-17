@@ -9,9 +9,11 @@ local _, addon = ...
 
 local Auction = {
     isOpen = false,
-    results = {},    -- [itemID] = { commodity = bool, rows = { row, ... } }
+    -- [itemID] = { commodity = bool, rows = { row, ... }, partial, at = GetTime() }
+    results = {},
     owned = nil,     -- your auctions from the last query
-    ownedMin = {},   -- [itemID] = cheapest unit price in the last undercut check
+    ownedMin = {},   -- [itemID] = cheapest unit price, by the last undercut check or a newer search
+    ownedCheckedAt = nil, -- GetTime() when the last undercut check began
 }
 addon.Auction = Auction
 
@@ -67,7 +69,7 @@ local function SetPending(kind, value)
     C_Timer.After(PENDING_TIMEOUT, function()
         if Auction[kind] == value then
             Auction[kind] = nil
-            addon:SetStatus("No answer from the auction house; check My auctions")
+            addon:SetStatus("No answer from the auction house; check the Cancel tab")
             addon:Refresh()
         end
     end)
@@ -211,7 +213,7 @@ addon:On("AUCTION_HOUSE_BROWSE_RESULTS_ADDED", function(added)
 end)
 
 --------------------------------------------------------------------------------
--- Scan everything: the whole house in one snapshot
+-- Full Auction House Scan: the whole house in one snapshot
 --------------------------------------------------------------------------------
 
 local FULL_SCAN_COOLDOWN = 15 * 60  -- the house allows one snapshot per 15 minutes
@@ -330,17 +332,21 @@ end)
 -- One item's auctions
 --------------------------------------------------------------------------------
 
-function Auction:Search(itemID)
+-- A background search, as the undercut check's, leaves "Searching..." to
+-- the search a pane waits on.
+function Auction:Search(itemID, background)
     if not itemID or not self.isOpen then return false end
-    if self.searching == itemID then return true end
-    self.searching = itemID
-    addon:Refresh()
-    C_Timer.After(ANSWER_TIMEOUT, function()
-        if Auction.searching == itemID then
-            Auction.searching = nil
-            addon:Refresh()
-        end
-    end)
+    if not background then
+        if self.searching == itemID then return true end
+        self.searching = itemID
+        addon:Refresh()
+        C_Timer.After(ANSWER_TIMEOUT, function()
+            if Auction.searching == itemID then
+                Auction.searching = nil
+                addon:Refresh()
+            end
+        end)
+    end
     return Send(function()
         local ok, key = pcall(C_AuctionHouse.MakeItemKey, itemID)
         if not (ok and key and pcall(C_AuctionHouse.SendSearchQuery, key, PRICE_SORT, true)) then
@@ -350,18 +356,22 @@ function Auction:Search(itemID)
     end)
 end
 
-local function Finish(itemID, commodity, rows)
+-- partial: the house holds more offers than the rows kept.
+local function Finish(itemID, commodity, rows, partial)
     addon:LearnCommodity(itemID, commodity)
-    Auction.results[itemID] = { commodity = commodity, rows = rows }
+    Auction.results[itemID] = { commodity = commodity, rows = rows, partial = partial, at = GetTime() }
     if rows[1] then addon:SetPrice(itemID, rows[1].unit) end
+    -- A newer cheapest for an item of yours that was checked, so the
+    -- undercut and the count of cheaper offers come from the same answer.
+    if rows[1] and Auction.ownedMin[itemID] then Auction.ownedMin[itemID] = rows[1].unit end
     if Auction.searching == itemID then Auction.searching = nil end
     addon:Fire("RESULTS", itemID)
     addon:Refresh()
 end
 
 addon:On("COMMODITY_SEARCH_RESULTS_UPDATED", function(itemID)
-    local rows = {}
-    for i = 1, math.min(C_AuctionHouse.GetNumCommoditySearchResults(itemID) or 0, MAX_ROWS) do
+    local rows, total = {}, C_AuctionHouse.GetNumCommoditySearchResults(itemID) or 0
+    for i = 1, math.min(total, MAX_ROWS) do
         local r = C_AuctionHouse.GetCommoditySearchResultInfo(itemID, i)
         if r and r.unitPrice then
             rows[#rows + 1] = {
@@ -371,14 +381,15 @@ addon:On("COMMODITY_SEARCH_RESULTS_UPDATED", function(itemID)
             }
         end
     end
-    Finish(itemID, true, rows)
+    local complete = C_AuctionHouse.HasFullCommoditySearchResults
+    Finish(itemID, true, rows, total > MAX_ROWS or (complete ~= nil and not complete(itemID)))
 end)
 
 addon:On("ITEM_SEARCH_RESULTS_UPDATED", function(itemKey)
     local itemID = itemKey and itemKey.itemID
     if not itemID then return end
-    local rows = {}
-    for i = 1, math.min(C_AuctionHouse.GetNumItemSearchResults(itemKey) or 0, MAX_ROWS) do
+    local rows, total = {}, C_AuctionHouse.GetNumItemSearchResults(itemKey) or 0
+    for i = 1, math.min(total, MAX_ROWS) do
         local r = C_AuctionHouse.GetItemSearchResultInfo(itemKey, i)
         -- Bid-only auctions can't be bought out, so they aren't offers here.
         -- A row gathers identical one-item auctions: quantity is how many,
@@ -396,7 +407,8 @@ addon:On("ITEM_SEARCH_RESULTS_UPDATED", function(itemKey)
         end
     end
     table.sort(rows, function(a, b) return a.unit < b.unit end)
-    Finish(itemID, false, rows)
+    local complete = C_AuctionHouse.HasFullItemSearchResults
+    Finish(itemID, false, rows, total > MAX_ROWS or (complete ~= nil and not complete(itemKey)))
 end)
 
 -- The price to post at: one step under the cheapest seller, or your own
@@ -754,6 +766,43 @@ addon:On("ITEM_KEY_ITEM_INFO_RECEIVED", function()
     addon:Refresh()
 end)
 
+-- How far under one of your auctions the cheapest offer is, each; nil when
+-- it isn't undercut or wasn't checked. Half a copper of slack for the
+-- per-unit price of multi-item auctions.
+function Auction:UndercutBy(auction)
+    local cheapest = self.ownedMin[auction.itemID]
+    if auction.sold or not (cheapest and auction.unit) or cheapest >= auction.unit - 0.5 then return nil end
+    return auction.unit - cheapest
+end
+
+-- How many are up for less than one of your auctions: auctions of an item,
+-- units of a commodity, from a search made since the last undercut check;
+-- nil before that search is in. more: the rows kept all cost less, and the
+-- house holds more.
+function Auction:CheaperThan(auction)
+    local result = self.results[auction.itemID]
+    if not (result and auction.unit and self.ownedCheckedAt and result.at >= self.ownedCheckedAt) then return nil end
+    local count = 0
+    for _, row in ipairs(result.rows) do
+        if row.unit >= auction.unit - 0.5 then return count, false end
+        count = count + row.quantity
+    end
+    return count, result.partial
+end
+
+-- After the check, each undercut item gets a search of its own, for how
+-- many offers cost less.
+local function SearchUndercut()
+    local searched = {}
+    for _, auction in ipairs(Auction.owned or {}) do
+        local itemID = auction.itemID
+        if not searched[itemID] and Auction:UndercutBy(auction) then
+            searched[itemID] = true
+            Auction:Search(itemID, true)
+        end
+    end
+end
+
 addon:On("OWNED_AUCTIONS_UPDATED", function()
     local rows, listed, active = {}, {}, {}
     for i = 1, C_AuctionHouse.GetNumOwnedAuctions() or 0 do
@@ -772,6 +821,8 @@ addon:On("OWNED_AUCTIONS_UPDATED", function()
                 buyout = sold and (info.buyoutAmount or info.bidAmount) or info.buyoutAmount,
                 sold = sold,
                 timeLeft = info.timeLeftSeconds,
+                -- A sold auction's time left runs until its gold is mailed.
+                arrives = sold and info.timeLeftSeconds and time() + info.timeLeftSeconds or nil,
             }
             if not sold then
                 listed[itemID] = (listed[itemID] or 0) + quantity
@@ -788,11 +839,13 @@ addon:On("OWNED_AUCTIONS_UPDATED", function()
     if checkAfterQuery then
         checkAfterQuery = false
         wipe(Auction.ownedMin)
+        Auction.ownedCheckedAt = GetTime()
         Auction:ScanPrices(active, "your auctions", {
             includeVendor = true,
             onBatch = function(found)
                 for itemID, price in pairs(found) do Auction.ownedMin[itemID] = price end
             end,
+            onDone = SearchUndercut,
         })
     end
 end)

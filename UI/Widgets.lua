@@ -18,6 +18,17 @@ function UI.Text(parent, font, justify)
     return text
 end
 
+-- Places a scroll list and its bar against an inset's right edge, as
+-- Blizzard's auction lists do: the bar is 8 px wide but its arrow buttons
+-- are 17, so the list stops 26 px short of the edge, and the bar sits 9 px
+-- right of it, which keeps the arrows inside the inset's border.
+function UI.PlaceScrollList(scrollBox, scrollBar, top, bottom)
+    scrollBox:SetPoint("TOPLEFT", 4, top)
+    scrollBox:SetPoint("BOTTOMRIGHT", -26, bottom)
+    scrollBar:SetPoint("TOPLEFT", scrollBox, "TOPRIGHT", 9, 0)
+    scrollBar:SetPoint("BOTTOMLEFT", scrollBox, "BOTTOMRIGHT", 9, 4)
+end
+
 function UI.Tooltip(owner, title, line)
     GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
     GameTooltip:SetText(title)
@@ -138,7 +149,22 @@ end
 -- to add it to a list
 --------------------------------------------------------------------------------
 
-function UI.ItemHeader(parent)
+local EMPTY_SLOT = "Interface\\PaperDoll\\UI-Backpack-EmptySlot"
+
+-- Puts the item on the cursor back where it came from and hands its ID and
+-- location to onTake. Returns whether the cursor held an item.
+function UI.TakeCursorItem(onTake)
+    local kind, itemID = GetCursorInfo()
+    if kind ~= "item" or not itemID then return false end
+    local location = C_Cursor and C_Cursor.GetCursorItem and C_Cursor.GetCursorItem()
+    ClearCursor()
+    onTake(itemID, location)
+    return true
+end
+
+-- With onDrop, the header is also a slot: an item dropped on it, or clicked
+-- onto it, goes to onDrop(itemID, location), and an empty one says so.
+function UI.ItemHeader(parent, onDrop)
     local header = CreateFrame("Frame", nil, parent)
     header:SetHeight(28)
 
@@ -154,19 +180,20 @@ function UI.ItemHeader(parent)
         GameTooltip:Show()
     end)
     header.iconButton:SetScript("OnLeave", GameTooltip_Hide)
-    header.iconButton:SetScript("OnClick", function() UI.ModifiedClick(header.itemID) end)
-
-    header.add = UI.Button(header, "+", 22, 20)
-    header.add:SetPoint("RIGHT")
-    header.add:SetScript("OnClick", function(self)
-        local itemID = header.itemID
-        addon:ShowListPicker(self, "Add to list", function(list) UI.AddToList(list, itemID) end)
+    header.iconButton:SetScript("OnClick", function()
+        if onDrop and UI.TakeCursorItem(onDrop) then return end
+        UI.ModifiedClick(header.itemID)
     end)
-    header.add:SetScript("OnEnter", function(self) UI.Tooltip(self, "Add to a list") end)
-    header.add:SetScript("OnLeave", GameTooltip_Hide)
+    if onDrop then
+        local function Drop() UI.TakeCursorItem(onDrop) end
+        header:EnableMouse(true)
+        header:SetScript("OnReceiveDrag", Drop)
+        header:SetScript("OnMouseUp", Drop)
+        header.iconButton:SetScript("OnReceiveDrag", Drop)
+    end
 
     header.note = UI.Text(header, "GameFontDisableSmall", "RIGHT")
-    header.note:SetPoint("RIGHT", header.add, "LEFT", -6, 0)
+    header.note:SetPoint("RIGHT", -4, 0)
 
     header.name = UI.Text(header, "GameFontNormal")
     header.name:SetPoint("LEFT", header.iconButton, "RIGHT", 6, 0)
@@ -174,11 +201,16 @@ function UI.ItemHeader(parent)
 
     function header:SetItem(itemID, note)
         self.itemID = itemID
-        self.icon:SetTexture(addon:ItemIcon(itemID))
-        self.name:SetText(addon:ItemName(itemID) or "...")
-        self.name:SetTextColor(addon:QualityColor(itemID))
+        if itemID then
+            self.icon:SetTexture(addon:ItemIcon(itemID))
+            self.name:SetText(addon:ItemName(itemID) or "...")
+            self.name:SetTextColor(addon:QualityColor(itemID))
+        else
+            self.icon:SetTexture(EMPTY_SLOT)
+            self.name:SetText(onDrop and "Drop an item here" or "")
+            self.name:SetTextColor(0.5, 0.5, 0.5)
+        end
         self.note:SetText(note or "")
-        self.add:SetShown(itemID ~= nil)
     end
 
     return header
@@ -202,10 +234,10 @@ end
 
 -- A commodity shows unit price and how many. An item auction shows its
 -- price and time left, and "x7" when seven identical ones share the row.
--- With onSelect, item rows can be picked.
-function UI.Ladder(parent, rowCount, onSelect)
+-- With onSelect, item rows can be picked. It shows as many rows as its
+-- height holds.
+function UI.Ladder(parent, onSelect)
     local ladder = CreateFrame("Frame", nil, parent)
-    ladder:SetHeight(ROW * (rowCount + 1) + 4)
     ladder.rows = {}
 
     ladder.leftHead = UI.Text(ladder, "GameFontNormalSmall")
@@ -214,9 +246,12 @@ function UI.Ladder(parent, rowCount, onSelect)
     ladder.rightHead:SetPoint("TOPRIGHT", -4, 0)
 
     ladder.message = UI.Text(ladder, "GameFontDisableSmall", "CENTER")
-    ladder.message:SetPoint("TOP", 0, -ROW * 2)
+    ladder.message:SetPoint("TOPLEFT", 8, -ROW * 2)
+    ladder.message:SetPoint("TOPRIGHT", -8, -ROW * 2)
+    ladder.message:SetWordWrap(true)
 
-    for i = 1, rowCount do
+    local function Row(i)
+        if ladder.rows[i] then return ladder.rows[i] end
         local row = CreateFrame("Button", nil, ladder)
         row:SetHeight(ROW)
         row:SetPoint("TOPLEFT", 0, -ROW * i - 2)
@@ -236,17 +271,24 @@ function UI.Ladder(parent, rowCount, onSelect)
             if onSelect and self.data then onSelect(self.data) end
         end)
         ladder.rows[i] = row
+        return row
     end
 
     -- rows: from addon.Auction.results; message: shown instead of rows.
     function ladder:SetData(rows, commodity, selected, message)
+        self.lastData = { rows, commodity, selected, message }
         self.leftHead:SetText(commodity and "Unit price" or "Price")
         self.rightHead:SetText(commodity and "Available" or "Time left")
         self.message:SetText(message or "")
-        for i, row in ipairs(self.rows) do
-            local data = not message and rows and rows[i]
-            row.data = data
-            row:SetShown(data and true or false)
+        -- The heading takes a row's height, and the gaps 4 more.
+        local fit = math.floor((self:GetHeight() - 4) / ROW) - 1
+        for i = 1, math.max(fit, #self.rows) do
+            local data = i <= fit and not message and rows and rows[i] or nil
+            local row = data and Row(i) or self.rows[i]
+            if row then
+                row.data = data
+                row:SetShown(data ~= nil)
+            end
             if data then
                 local note = data.own and "|cff66bbffyours|r" or ""
                 if commodity then
@@ -263,6 +305,11 @@ function UI.Ladder(parent, rowCount, onSelect)
         end
     end
 
+    -- A new height shows more or fewer rows.
+    ladder:SetScript("OnSizeChanged", function(self)
+        if self.lastData then self:SetData(unpack(self.lastData, 1, 4)) end
+    end)
+
     return ladder
 end
 
@@ -277,7 +324,7 @@ function UI.AddToList(list, itemID)
     local text = ("%s %s %s"):format(addon:ItemName(itemID) or "Item", added and "added to" or "is already on",
         list.name)
     addon:SetStatus(text)
-    if not (addon.window and addon.window:IsShown()) then UIErrorsFrame:AddMessage(text, 1, 0.82, 0) end
+    if not (addon.window and addon.window:IsVisible()) then UIErrorsFrame:AddMessage(text, 1, 0.82, 0) end
 end
 
 -- An item's menu: search for it at the auction house, see its price history,

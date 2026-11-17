@@ -7,6 +7,11 @@ local _, addon = ...
 local UI = addon.UI
 local Auction = addon.Auction
 
+-- The inputs sit just above the buttons: from the pane's bottom, the
+-- buttons' 34, a gap of 12, and the quantity, note and total lines' 50.
+-- The offers fill the space above.
+local CONTROLS_TOP = 96
+
 -- What the selected list's planned crafts still lack, or one when the list
 -- doesn't use the item.
 local function DefaultQuantity(itemID)
@@ -37,18 +42,18 @@ function UI.CreateBuyPane(parent)
     pane.header:SetPoint("TOPLEFT", 6, -4)
     pane.header:SetPoint("TOPRIGHT", -6, -4)
 
-    pane.ladder = UI.Ladder(pane, 12, function(row)
+    pane.ladder = UI.Ladder(pane, function(row)
         if row.auctionID and not row.own then
             pane.pickedID = row.auctionID
             pane:Refresh()
         end
     end)
     pane.ladder:SetPoint("TOPLEFT", pane.header, "BOTTOMLEFT", 0, -6)
-    pane.ladder:SetPoint("TOPRIGHT", pane.header, "BOTTOMRIGHT", 0, -6)
+    pane.ladder:SetPoint("BOTTOMRIGHT", -6, CONTROLS_TOP + 12)
 
     pane.quantityLabel = UI.Text(pane, "GameFontHighlight")
     pane.quantityLabel:SetText("Quantity")
-    pane.quantityLabel:SetPoint("TOPLEFT", pane.ladder, "BOTTOMLEFT", 4, -12)
+    pane.quantityLabel:SetPoint("TOPLEFT", pane, "BOTTOMLEFT", 10, CONTROLS_TOP)
     pane.quantity = CreateFrame("EditBox", nil, pane, "InputBoxTemplate")
     pane.quantity:SetSize(70, 20)
     pane.quantity:SetAutoFocus(false)

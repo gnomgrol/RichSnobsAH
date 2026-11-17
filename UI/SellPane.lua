@@ -1,13 +1,19 @@
 -- The Sell tab: post the selected item at a price prefilled one step under
 -- the cheapest other seller, with the deposit and the profit after the cut.
 -- Next steps through the items on your lists that are in your bags, except
--- on lists marked not for sale.
+-- on lists marked not for sale. Any item can be dropped on the header, or
+-- right-clicked in your bags while this tab shows (Window.lua).
 
 local _, addon = ...
 local UI = addon.UI
 local Auction = addon.Auction
 
 local DURATIONS = { "2 hours", "8 hours", "24 hours" }
+
+-- The inputs sit just above the buttons: from the pane's bottom, the
+-- buttons' 34, a gap of 12, and the quantity, price, duration, deposit and
+-- profit lines' 112. The offers fill the space above.
+local CONTROLS_TOP = 158
 
 local GREEN = { 0.25, 0.9, 0.25 }
 local RED = { 1, 0.3, 0.3 }
@@ -52,18 +58,22 @@ end
 function UI.CreateSellPane(parent)
     local pane = CreateFrame("Frame", nil, parent)
 
-    pane.header = UI.ItemHeader(pane)
+    -- An item the auction house won't take shows the game's own error.
+    pane.header = UI.ItemHeader(pane, function(itemID, location)
+        if location and not C_AuctionHouse.IsSellItemValid(location, true) then return end
+        addon:Select({ itemID = itemID }, "sell")
+    end)
     pane.header:SetPoint("TOPLEFT", 6, -4)
     pane.header:SetPoint("TOPRIGHT", -6, -4)
 
-    pane.ladder = UI.Ladder(pane, 7)
+    pane.ladder = UI.Ladder(pane)
     pane.ladder:SetPoint("TOPLEFT", pane.header, "BOTTOMLEFT", 0, -6)
-    pane.ladder:SetPoint("TOPRIGHT", pane.header, "BOTTOMRIGHT", 0, -6)
+    pane.ladder:SetPoint("BOTTOMRIGHT", -6, CONTROLS_TOP + 12)
 
     -- Quantity: commodities from all your stacks at once, items one per post.
     pane.quantityLabel = UI.Text(pane, "GameFontHighlight")
     pane.quantityLabel:SetText("Quantity")
-    pane.quantityLabel:SetPoint("TOPLEFT", pane.ladder, "BOTTOMLEFT", 4, -12)
+    pane.quantityLabel:SetPoint("TOPLEFT", pane, "BOTTOMLEFT", 10, CONTROLS_TOP)
     pane.quantity = CreateFrame("EditBox", nil, pane, "InputBoxTemplate")
     pane.quantity:SetSize(60, 20)
     pane.quantity:SetAutoFocus(false)
@@ -201,14 +211,13 @@ function UI.CreateSellPane(parent)
 
         local message
         if not itemID then
-            message = "Pick an item in a list, or press Next"
+            message = "Pick an item in a list, right-click one in your bags, or press Next"
         elseif not result then
             message = Auction.searching == itemID and "Searching..." or "Not searched yet"
         elseif #result.rows == 0 then
             message = "Nobody is selling this"
         end
         self.header:SetItem(itemID, itemID and ("%d in your bags"):format(count) or "")
-        self.header:SetShown(itemID ~= nil)
         self.ladder:SetData(result and result.rows, commodity ~= false, nil, message)
 
         local most = 0
