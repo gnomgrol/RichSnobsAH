@@ -253,15 +253,15 @@ addon:Listen("REFRESH", function()
     if frame then UpdateScanAll() end
 end)
 
--- Alt-click any item, in your bags, a chat link, a profession window or the
--- auction house's list, for its menu: search for it, or add it to a list.
+-- Alt-click any item, in your bags, a chat link, a profession window or
+-- Blizzard's Buy views, for its menu: search for it, or add it to a list.
 -- Alt alone, so Alt with Shift or Ctrl stays free for other addons.
 local function AltClicked()
     return IsAltKeyDown() and not IsShiftKeyDown() and not IsControlKeyDown()
 end
 
--- A menu closes when its owner hides, and the auction house hides the list
--- you clicked in, so these menus belong to UIParent.
+-- Most of these clicks come with a link and no frame to own the menu, so all
+-- these menus belong to UIParent.
 local function OpenItemMenu(itemID)
     if itemID and addon.db then addon:ShowItemMenu(UIParent, itemID) end
 end
@@ -269,6 +269,19 @@ end
 if HandleModifiedItemClick then
     hooksecurefunc("HandleModifiedItemClick", function(link)
         if AltClicked() and type(link) == "string" then OpenItemMenu((C_Item.GetItemInfoInstant(link))) end
+    end)
+end
+
+-- Blizzard's right-click menu on an auction house item, the one with Set
+-- Favorite, gets an Add to list submenu. It opens on a browse list row, or on
+-- the item at the top of an item's view.
+if Menu and Menu.ModifyMenu then
+    Menu.ModifyMenu("MENU_AUCTION_HOUSE_FAVORITE", function(owner, root)
+        local row = owner.GetRowData and owner:GetRowData()
+        local key = row and row.itemKey or owner.GetItemKey and owner:GetItemKey()
+        if not (key and key.itemID and addon.db) then return end
+        root:CreateDivider()
+        UI.ListButtons(root:CreateButton("Add to list"), function(list) UI.AddToList(list, key.itemID) end)
     end)
 end
 
@@ -337,13 +350,46 @@ local function SetUpAuctionHouse()
         self:SetWidth(width + (self.displayMode == mode and TAB_EXTRA_WIDTH or 0))
     end)
 
-    -- Its list passes on only Shift- and Ctrl-clicks; an Alt-click opens the
-    -- item like a plain click, and the menu comes along.
-    if type(AuctionHouseFrame.SelectBrowseResult) == "function" then
-        hooksecurefunc(AuctionHouseFrame, "SelectBrowseResult", function(_, result)
-            if AltClicked() and result and result.itemKey then OpenItemMenu(result.itemKey.itemID) end
+    -- On the browse list, an Alt-click opens the menu instead of the item.
+    -- Only replacing the method that opens it can stop that; a hook runs after.
+    local browse = AuctionHouseFrame.BrowseResultsFrame
+    if browse and type(browse.OnBrowseResultSelected) == "function" then
+        local OpenResult = browse.OnBrowseResultSelected
+        function browse:OnBrowseResultSelected(result, ...)
+            if AltClicked() and result and result.itemKey then return OpenItemMenu(result.itemKey.itemID) end
+            return OpenResult(self, result, ...)
+        end
+    end
+
+    -- The view of one item: an Alt-click on one of its offers selects it, and
+    -- one on the item at the top does nothing; the menu comes along with both.
+    -- Blizzard selects an offer itself when a search answer names one, so only
+    -- a selection with the pointer on the list counts as a click.
+    local function HookOffers(list)
+        if not (list and type(list.SetSelectedEntry) == "function") then return end
+        hooksecurefunc(list, "SetSelectedEntry", function(self, row)
+            if row and AltClicked() and self:IsMouseOver() then
+                OpenItemMenu(row.itemID or row.itemKey and row.itemKey.itemID)
+            end
         end)
     end
+    -- Its icon hands clicks to the display's method, not its script, so the
+    -- icon gets the hook too.
+    local function HookItemDisplay(display)
+        if not (display and display.HookScript) then return end
+        local function OnClick(_, button)
+            if button ~= "LeftButton" or not AltClicked() then return end
+            local key = display:GetItemKey()
+            OpenItemMenu(key and key.itemID or display:GetItemID())
+        end
+        display:HookScript("OnClick", OnClick)
+        if display.ItemButton then display.ItemButton:HookScript("OnClick", OnClick) end
+    end
+    local itemBuy, commoditiesBuy = AuctionHouseFrame.ItemBuyFrame, AuctionHouseFrame.CommoditiesBuyFrame
+    HookOffers(itemBuy and itemBuy.ItemList)
+    HookOffers(commoditiesBuy and commoditiesBuy.ItemList)
+    HookItemDisplay(itemBuy and itemBuy.ItemDisplay)
+    HookItemDisplay(commoditiesBuy and commoditiesBuy.BuyDisplay and commoditiesBuy.BuyDisplay.ItemDisplay)
 
     if type(AuctionHouseFrame.SetSearchText) == "function" then
         hooksecurefunc(AuctionHouseFrame, "SetSearchText", function(self, text)

@@ -327,6 +327,16 @@ function UI.AddToList(list, itemID)
     if not (addon.window and addon.window:IsVisible()) then UIErrorsFrame:AddMessage(text, 1, 0.82, 0) end
 end
 
+-- Your lists as buttons under root, plus a new one; onPick gets the list.
+function UI.ListButtons(root, onPick)
+    for _, list in ipairs(addon.db.lists) do
+        root:CreateButton(list.name, function() onPick(list) end)
+    end
+    root:CreateButton("New list...", function()
+        addon:Prompt("Name of the new list:", "", function(name) onPick(addon:NewList(name)) end)
+    end)
+end
+
 -- An item's menu: search for it at the auction house, see its price history,
 -- or add it to a list. Alt-click on any item opens it too (Window.lua).
 function addon:ShowItemMenu(owner, itemID)
@@ -340,12 +350,7 @@ function addon:ShowItemMenu(owner, itemID)
         root:CreateButton("Price history", function() addon:ShowHistory(itemID) end)
         root:CreateDivider()
         root:CreateTitle("Add to list")
-        for _, list in ipairs(addon.db.lists) do
-            root:CreateButton(list.name, function() UI.AddToList(list, itemID) end)
-        end
-        root:CreateButton("New list...", function()
-            addon:Prompt("Name of the new list:", "", function(name) UI.AddToList(addon:NewList(name), itemID) end)
-        end)
+        UI.ListButtons(root, function(list) UI.AddToList(list, itemID) end)
     end)
 end
 
@@ -353,14 +358,7 @@ end
 function addon:ShowListPicker(owner, title, onPick)
     MenuUtil.CreateContextMenu(owner, function(_, root)
         root:CreateTitle(title)
-        for _, list in ipairs(addon.db.lists) do
-            root:CreateButton(list.name, function() onPick(list) end)
-        end
-        root:CreateButton("New list...", function()
-            addon:Prompt("Name of the new list:", "", function(name)
-                onPick(addon:NewList(name))
-            end)
-        end)
+        UI.ListButtons(root, onPick)
     end)
 end
 
