@@ -36,6 +36,8 @@ local function Defaults()
                            -- kept for good; from the auction house's mail (Sales.lua)
         purchases = {},    -- { t, itemID, count, price, char }, oldest first, kept for good;
                            -- your buyouts at the auction house (Auction.lua)
+        posted = {},       -- [character] = { [itemID] = { [price each] = time() } }: your
+                           -- posts for a month, to tell a sale mail's item (Sales.lua)
         history = { days = {}, weeks = {} }, -- [itemID] = the item's daily and weekly
                            -- prices, each packed into a string (History.lua); kept for good
         minimap = { hide = false }, -- LibDBIcon's settings: hide, minimapPos

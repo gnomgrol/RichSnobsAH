@@ -234,8 +234,8 @@ end
 
 -- A commodity shows unit price and how many. An item auction shows its
 -- price and time left, and "x7" when seven identical ones share the row.
--- With onSelect, item rows can be picked. It shows as many rows as its
--- height holds.
+-- With onSelect, a click on a row passes it on. It shows as many rows as
+-- its height holds.
 function UI.Ladder(parent, onSelect)
     local ladder = CreateFrame("Frame", nil, parent)
     ladder.rows = {}

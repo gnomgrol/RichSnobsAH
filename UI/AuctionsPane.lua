@@ -1,7 +1,8 @@
 -- The Cancel tab: your auctions grouped as Undercut, Cheapest and Sold,
 -- checked against the cheapest offers in one batched request, then each
 -- undercut item searched for by how many and how much; a cancel button on
--- each, and what the sold ones bring in after the cut, and when.
+-- each, what the unsold ones are listed for, and what the sold ones bring
+-- in after the cut, and when.
 
 local _, addon = ...
 local UI = addon.UI
@@ -53,6 +54,15 @@ local function Incoming()
         end
     end
     return money, first, last
+end
+
+-- What the unsold auctions are up for, at their full buyout.
+local function Listed()
+    local money = 0
+    for _, auction in ipairs(Auction.owned or {}) do
+        if not auction.sold then money = money + (auction.total or 0) end
+    end
+    return money
 end
 
 -- "in 12 min", or "in 3-58 min" when the payments are spread out.
@@ -174,7 +184,7 @@ function UI.CreateAuctionsPane(parent)
 
     pane.scrollBox = CreateFrame("Frame", nil, pane, "WowScrollBoxList")
     pane.scrollBar = CreateFrame("EventFrame", nil, pane, "MinimalScrollBar")
-    UI.PlaceScrollList(pane.scrollBox, pane.scrollBar, -4, 62)
+    UI.PlaceScrollList(pane.scrollBox, pane.scrollBar, -4, 80)
     local view = CreateScrollBoxListLinearView()
     view:SetElementExtent(ROW_HEIGHT)
     view:SetElementInitializer("Button", UpdateRow)
@@ -182,6 +192,13 @@ function UI.CreateAuctionsPane(parent)
 
     pane.message = UI.Text(pane, "GameFontDisableSmall", "CENTER")
     pane.message:SetPoint("TOP", 0, -40)
+
+    pane.listed = UI.Text(pane, "GameFontHighlight", "RIGHT")
+    pane.listed:SetPoint("BOTTOMRIGHT", -10, 62)
+    pane.listedLabel = UI.Text(pane, "GameFontHighlight")
+    pane.listedLabel:SetPoint("BOTTOMLEFT", 10, 62)
+    pane.listedLabel:SetPoint("RIGHT", pane.listed, "LEFT", -6, 0)
+    pane.listedLabel:SetText("Listed")
 
     pane.incoming = UI.Text(pane, "GameFontHighlight", "RIGHT")
     pane.incoming:SetPoint("BOTTOMRIGHT", -10, 44)
@@ -224,6 +241,7 @@ function UI.CreateAuctionsPane(parent)
         else
             self.message:SetText("")
         end
+        self.listed:SetText(addon.Money(Listed()))
         self:UpdateIncoming()
         self.refresh:SetEnabled(Auction:CanAct() and not Auction:IsScanning())
     end

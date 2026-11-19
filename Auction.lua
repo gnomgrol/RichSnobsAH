@@ -411,18 +411,22 @@ addon:On("ITEM_SEARCH_RESULTS_UPDATED", function(itemKey)
     Finish(itemID, false, rows, total > MAX_ROWS or (complete ~= nil and not complete(itemKey)))
 end)
 
--- The price to post at: one step under the cheapest seller, or your own
--- price when you are the cheapest already. Commodities step by a copper
--- unless the client says it takes none; item auctions take whole silver.
+-- The price to post at to undercut an offer: one step under it, or its own
+-- price when the offer is yours. Commodities step by a copper unless the
+-- client says it takes none; item auctions take whole silver.
+function Auction:PriceUnder(row, commodity)
+    if row.own then return row.unit end
+    local copper = commodity and not (C_AuctionHouse.SupportsCopperValues
+        and C_AuctionHouse.SupportsCopperValues() == false)
+    if copper then return math.max(1, row.unit - 1) end
+    return math.max(100, math.floor((row.unit - 1) / 100) * 100)
+end
+
+-- The price to post at: under the cheapest offer.
 function Auction:SuggestPrice(itemID, commodity)
     local result = self.results[itemID]
     local first = result and result.rows[1]
-    if not first then return nil end
-    if first.own then return first.unit end
-    local copper = commodity and not (C_AuctionHouse.SupportsCopperValues
-        and C_AuctionHouse.SupportsCopperValues() == false)
-    if copper then return math.max(1, first.unit - 1) end
-    return math.max(100, math.floor((first.unit - 1) / 100) * 100)
+    return first and self:PriceUnder(first, commodity) or nil
 end
 
 --------------------------------------------------------------------------------

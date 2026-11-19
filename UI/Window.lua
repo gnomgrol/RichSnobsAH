@@ -272,6 +272,26 @@ if HandleModifiedItemClick then
     end)
 end
 
+-- Shift-click an item, in your bags, a chat link or a profession window, while
+-- this tab shows Buy, and it is searched for there, as Blizzard's Buy tab
+-- takes it into its search bar. With no chat box open, the game hands the
+-- item's name to the auction frame's SetSearchText, which turns it down on
+-- this tab; that keeps the name, and the link it came from follows as
+-- InsertLink returns, in the same frame.
+local shiftName, shiftTime
+
+if ChatFrameUtil and ChatFrameUtil.InsertLink then
+    hooksecurefunc(ChatFrameUtil, "InsertLink", function(link)
+        local name = shiftTime == GetTime() and shiftName
+        shiftName = nil
+        local itemID = name and type(link) == "string" and C_Item.GetItemInfoInstant(link)
+        if itemID and C_Item.GetItemInfo(link) == name then
+            addon:Select({ itemID = itemID }, "buy")
+            addon.Auction:Search(itemID)
+        end
+    end)
+end
+
 -- Made on the first visit, when Blizzard's auction frame exists. The tab is
 -- one of the frame's display modes, like its own three, so Blizzard's tab
 -- code shows and hides it.
@@ -322,6 +342,12 @@ local function SetUpAuctionHouse()
     if type(AuctionHouseFrame.SelectBrowseResult) == "function" then
         hooksecurefunc(AuctionHouseFrame, "SelectBrowseResult", function(_, result)
             if AltClicked() and result and result.itemKey then OpenItemMenu(result.itemKey.itemID) end
+        end)
+    end
+
+    if type(AuctionHouseFrame.SetSearchText) == "function" then
+        hooksecurefunc(AuctionHouseFrame, "SetSearchText", function(self, text)
+            if self.displayMode == mode and frame.tabs.selected == 1 then shiftName, shiftTime = text, GetTime() end
         end)
     end
 

@@ -27,6 +27,13 @@ local function Profit(sale)
     if sale.cost then return Income(sale) - sale.cost * sale.count end
 end
 
+-- A sale whose mail named no item, and whose price matched no post, has no
+-- name at all.
+local function SaleName(sale)
+    if sale.itemID then return addon:ItemName(sale.itemID) or sale.name end
+    return sale.name ~= "" and sale.name or "Unknown item"
+end
+
 -- Income since midnight, over the last 7 days and over the last 30.
 local function Totals()
     local now = time()
@@ -64,7 +71,7 @@ local function OnRowEnter(row)
     if sale.itemID then
         GameTooltip:SetItemByID(sale.itemID)
     else
-        GameTooltip:SetText(sale.name)
+        GameTooltip:SetText(SaleName(sale))
     end
     local r, g, b = 1, 0.82, 0
     GameTooltip:AddDoubleLine("Sold for", addon.Money(sale.price, true), r, g, b, 1, 1, 1)
@@ -111,7 +118,7 @@ local function UpdateRow(row, sale)
     InitRow(row)
     row.data = sale
     row.icon:SetTexture(addon:ItemIcon(sale.itemID))
-    row.name:SetText(sale.itemID and addon:ItemName(sale.itemID) or sale.name)
+    row.name:SetText(SaleName(sale))
     row.name:SetTextColor(addon:QualityColor(sale.itemID))
     row.cells.when:SetText(addon.Age(time() - sale.t))
     row.cells.count:SetText(sale.count)

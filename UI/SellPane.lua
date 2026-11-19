@@ -1,5 +1,6 @@
 -- The Sell tab: post the selected item at a price prefilled one step under
--- the cheapest other seller, with the deposit and the profit after the cut.
+-- the cheapest other seller, or under the offer you click, with the deposit
+-- and the profit after the cut.
 -- Next steps through the items on your lists that are in your bags, except
 -- on lists marked not for sale. Any item can be dropped on the header, or
 -- right-clicked in your bags while this tab shows (Window.lua).
@@ -66,21 +67,41 @@ function UI.CreateSellPane(parent)
     pane.header:SetPoint("TOPLEFT", 6, -4)
     pane.header:SetPoint("TOPRIGHT", -6, -4)
 
-    pane.ladder = UI.Ladder(pane)
+    -- A click on an offer prices yours one step under it, or at its price
+    -- when it's yours, and marks it until the price or the item changes.
+    pane.ladder = UI.Ladder(pane, function(row)
+        local result = pane.itemID and Auction.results[pane.itemID]
+        if not (result and row.unit) then return end
+        pane.target = row.unit
+        pane.autoPrice = false
+        pane:SetPrice(Auction:PriceUnder(row, result.commodity))
+        addon:Refresh()
+    end)
     pane.ladder:SetPoint("TOPLEFT", pane.header, "BOTTOMLEFT", 0, -6)
     pane.ladder:SetPoint("BOTTOMRIGHT", -6, CONTROLS_TOP + 12)
 
     -- Quantity: commodities from all your stacks at once, items one per post.
+    -- Max goes back to as many as can be posted, which then follows your bags.
     pane.quantityLabel = UI.Text(pane, "GameFontHighlight")
     pane.quantityLabel:SetText("Quantity")
     pane.quantityLabel:SetPoint("TOPLEFT", pane, "BOTTOMLEFT", 10, CONTROLS_TOP)
+    pane.max = UI.Button(pane, "Max", 44, 20)
+    pane.max:SetPoint("RIGHT", pane, "RIGHT", -10, 0)
+    pane.max:SetPoint("TOP", pane.quantityLabel, "TOP", 0, 4)
+    pane.max:SetScript("OnClick", function()
+        pane.autoQuantity = true
+        pane.quantity:ClearFocus()
+        addon:Refresh()
+    end)
+    -- "of 12" between the box and Max; an item's "one per post" takes their place.
+    pane.quantityNote = UI.Text(pane, "GameFontDisableSmall", "RIGHT")
+    pane.quantityNote:SetPoint("RIGHT", pane.max, "LEFT", -6, 0)
     pane.quantity = CreateFrame("EditBox", nil, pane, "InputBoxTemplate")
     pane.quantity:SetSize(60, 20)
     pane.quantity:SetAutoFocus(false)
     pane.quantity:SetNumeric(true)
     pane.quantity:SetMaxLetters(6)
-    pane.quantity:SetPoint("RIGHT", pane, "RIGHT", -10, 0)
-    pane.quantity:SetPoint("TOP", pane.quantityLabel, "TOP", 0, 4)
+    pane.quantity:SetPoint("RIGHT", pane.quantityNote, "LEFT", -8, 0)
     pane.quantity:SetScript("OnTextChanged", function(_, userInput)
         if userInput then
             pane.autoQuantity = false
@@ -89,8 +110,6 @@ function UI.CreateSellPane(parent)
     end)
     pane.quantity:SetScript("OnEnterPressed", EditBox_ClearFocus)
     pane.quantity:SetScript("OnEscapePressed", EditBox_ClearFocus)
-    pane.quantityNote = UI.Text(pane, "GameFontDisableSmall", "RIGHT")
-    pane.quantityNote:SetPoint("RIGHT", pane.quantity, "LEFT", -8, 0)
 
     pane.priceLabel = UI.Text(pane, "GameFontHighlight")
     pane.priceLabel:SetText("Each")
@@ -101,7 +120,7 @@ function UI.CreateSellPane(parent)
     -- A change that is just the price SetPrice wrote isn't the player's.
     local function PriceChanged()
         if pane.settingPrice or MoneyInputFrame_GetCopper(pane.price) == pane.writtenPrice then return end
-        pane.autoPrice = false
+        pane.autoPrice, pane.target = false, nil
         addon:Refresh()
     end
     if MoneyInputFrame_SetOnValueChangedFunc then
@@ -164,7 +183,7 @@ function UI.CreateSellPane(parent)
     function pane:SetItem(itemID)
         if self.itemID == itemID then return end
         self.itemID = itemID
-        self.autoPrice, self.autoQuantity = true, true
+        self.autoPrice, self.autoQuantity, self.target = true, true, nil
         self:SetPrice(0)
         if itemID and Auction.isOpen then Auction:Search(itemID) end
     end
@@ -218,7 +237,15 @@ function UI.CreateSellPane(parent)
             message = "Nobody is selling this"
         end
         self.header:SetItem(itemID, itemID and ("%d in your bags"):format(count) or "")
-        self.ladder:SetData(result and result.rows, commodity ~= false, nil, message)
+        -- The clicked offer stays marked through new searches while its price is up.
+        local target
+        for _, row in ipairs(self.target and result and result.rows or {}) do
+            if row.unit == self.target then
+                target = row
+                break
+            end
+        end
+        self.ladder:SetData(result and result.rows, commodity ~= false, target, message)
 
         local most = 0
         if location then
@@ -234,8 +261,12 @@ function UI.CreateSellPane(parent)
             if self.quantity:GetText() ~= text then self.quantity:SetText(text) end
         end
         local quantity = math.min(tonumber(self.quantity:GetText()) or 0, most)
-        self.quantityNote:SetText(commodity and ("of %d"):format(most) or "one per post")
-        self.quantity:SetShown(commodity ~= false)
+        local perPost = commodity == false
+        self.quantityNote:SetText(perPost and "one per post" or commodity and ("of %d"):format(most) or "")
+        self.quantityNote:ClearAllPoints()
+        self.quantityNote:SetPoint("RIGHT", self.max, perPost and "RIGHT" or "LEFT", perPost and 0 or -6, 0)
+        self.quantity:SetShown(not perPost)
+        self.max:SetShown(not perPost)
 
         if self.autoPrice and itemID then
             local price = Auction:SuggestPrice(itemID, commodity) or addon:GetAHPrice(itemID)
