@@ -1,9 +1,10 @@
 -- The one window: your lists, the craft queue, the price lookup or your
--- sales on the left; Buy, Sell and Cancel on the right; above them a bar
--- with the status line and the Full Auction House Scan. At the auction
--- house it all sits in a fourth tab of Blizzard's auction frame, after Buy,
--- Sell and Auctions. Away from it, the left side is a window of its own that
--- can be moved. Both show the same frames, moved to whichever is open.
+-- sales on the left; Buy, Sell, Auctions, Snipe and Stay cheapest on the
+-- right; above them a bar with the status line and the Full Auction House
+-- Scan. At the auction house it all sits in a fourth tab of Blizzard's
+-- auction frame, after Buy, Sell and Auctions. Away from it, the left side
+-- is a window of its own that can be moved. Both show the same frames,
+-- moved to whichever is open.
 
 local _, addon = ...
 local UI = addon.UI
@@ -36,6 +37,8 @@ local function ShowTab(index)
     frame.buy:SetShown(index == 1)
     frame.sell:SetShown(index == 2)
     frame.auctions:SetShown(index == 3)
+    frame.snipe:SetShown(index == 4)
+    frame.stay:SetShown(index == 5)
 end
 
 -- Picking Prices puts the cursor in its search box.
@@ -193,11 +196,13 @@ local function Create()
     frame.buy = UI.CreateBuyPane(frame.right)
     frame.sell = UI.CreateSellPane(frame.right)
     frame.auctions = UI.CreateAuctionsPane(frame.right)
-    for _, pane in ipairs({ frame.buy, frame.sell, frame.auctions }) do
+    frame.snipe = UI.CreateSnipePane(frame.right)
+    frame.stay = UI.CreateStayPane(frame.right)
+    for _, pane in ipairs({ frame.buy, frame.sell, frame.auctions, frame.snipe, frame.stay }) do
         pane:SetPoint("TOPLEFT", 0, -30)
         pane:SetPoint("BOTTOMRIGHT")
     end
-    frame.tabs = UI.Tabs(tabBar, { "Buy", "Sell", "Cancel" }, ShowTab)
+    frame.tabs = UI.Tabs(tabBar, { "Buy", "Sell", "Auctions", "Snipe", "Stay cheapest" }, ShowTab)
     frame.tabs:Select(1)
 
     MoveContent(frame)
@@ -233,7 +238,7 @@ function addon:Toggle()
 end
 
 -- Shows an item in the right pane. tab: "buy" or "sell" switches to it;
--- otherwise Cancel gives way to Buy.
+-- otherwise Auctions, Snipe and Stay cheapest give way to Buy.
 function addon:Select(selection, tab)
     self.selected = selection
     if frame then
@@ -241,7 +246,7 @@ function addon:Select(selection, tab)
             frame.tabs:Select(1)
         elseif tab == "sell" then
             frame.tabs:Select(2)
-        elseif frame.tabs.selected == 3 then
+        elseif frame.tabs.selected >= 3 then
             frame.tabs:Select(1)
         end
     end

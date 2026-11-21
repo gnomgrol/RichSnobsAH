@@ -1,8 +1,10 @@
--- The Cancel tab: your auctions grouped as Undercut, Cheapest and Sold,
+-- The Auctions tab: your auctions grouped as Undercut, Cheapest and Sold,
 -- checked against the cheapest offers in one batched request, then each
 -- undercut item searched for by how many and how much; a cancel button on
--- each, what the unsold ones are listed for, and what the sold ones bring
--- in after the cut, and when.
+-- each unsold one, and on each sold one the time until its gold comes.
+-- Below, what the unsold ones are listed for, and what the sold ones bring
+-- in after the cut, and when. Cancel next undercut takes them down one per
+-- click, for the end of a round of selling.
 
 local _, addon = ...
 local UI = addon.UI
@@ -39,6 +41,16 @@ local function ByName(a, b)
     return a.auctionID < b.auctionID
 end
 
+-- Your undercut auctions, in the order they show.
+local function Undercut()
+    local auctions = {}
+    for _, auction in ipairs(Auction.owned or {}) do
+        if GroupOf(auction) == "undercut" then auctions[#auctions + 1] = auction end
+    end
+    table.sort(auctions, ByName)
+    return auctions
+end
+
 -- What the sold auctions bring in after the cut, and the first and last time
 -- their gold is mailed, of those still to come that the game gave a time for.
 local function Incoming()
@@ -71,6 +83,14 @@ local function ArrivalText(first, last)
     if soon == late then return "in " .. soon end
     if soon:match("%a+$") == late:match("%a+$") then return ("in %s-%s"):format(soon:match("^%d+"), late) end
     return ("in %s to %s"):format(soon, late)
+end
+
+-- "in 12 min" until a sold auction's gold is mailed, then "mailed"; nothing
+-- for an unsold one, or when the game gave no time.
+local function ArrivesIn(auction)
+    if not auction.arrives then return "" end
+    local left = auction.arrives - time()
+    return left > 0 and "in " .. addon.Age(left) or "mailed"
 end
 
 local function BuildElements()
@@ -129,6 +149,9 @@ local function InitRow(row)
     end)
     row.price = UI.Text(row, nil, "RIGHT")
     row.price:SetPoint("RIGHT", row.cancel, "LEFT", -4, 0)
+    -- A sold auction has no Cancel; the time until its gold comes sits there.
+    row.arrives = UI.Text(row, nil, "RIGHT")
+    row.arrives:SetPoint("RIGHT", row.cancel, "RIGHT")
     row.name = UI.Text(row)
     row:SetScript("OnEnter", OnRowEnter)
     row:SetScript("OnLeave", GameTooltip_Hide)
@@ -146,6 +169,7 @@ local function UpdateRow(row, data)
         row.icon:Hide()
         row.cancel:Hide()
         row.price:SetText("")
+        row.arrives:SetText("")
         row.name:SetFontObject("GameFontNormal")
         row.name:SetTextColor(unpack(data.group.color))
         row.name:SetPoint("LEFT", 4, 0)
@@ -177,6 +201,7 @@ local function UpdateRow(row, data)
 
     row.cancel:SetShown(not auction.sold)
     row.cancel:SetEnabled(Auction:CanAct() and not Auction:Busy())
+    row.arrives:SetText(ArrivesIn(auction))
 end
 
 function UI.CreateAuctionsPane(parent)
@@ -208,8 +233,21 @@ function UI.CreateAuctionsPane(parent)
 
     pane.refresh = UI.Button(pane, "Check again", 120, 26)
     pane.refresh:SetPoint("BOTTOMLEFT", 8, 8)
-    pane.refresh:SetPoint("RIGHT", -8, 0)
     pane.refresh:SetScript("OnClick", function() Auction:QueryOwned(true) end)
+
+    -- The end of a round of selling: the game wants a click for each cancel,
+    -- so each click cancels the first undercut auction.
+    pane.cancelNext = UI.Button(pane, "Cancel next undercut", 120, 26)
+    pane.cancelNext:SetPoint("LEFT", pane.refresh, "RIGHT", 6, 0)
+    pane.cancelNext:SetPoint("RIGHT", -8, 0)
+    pane.cancelNext:SetScript("OnClick", function()
+        local auction = Undercut()[1]
+        if auction then Auction:Cancel(auction.auctionID) end
+    end)
+    pane.cancelNext:SetScript("OnEnter", function(self)
+        UI.Tooltip(self, "Cancel next undercut", "Cancels the first of your undercut auctions; one per click")
+    end)
+    pane.cancelNext:SetScript("OnLeave", GameTooltip_Hide)
 
     local due
     function pane:UpdateIncoming()
@@ -220,8 +258,9 @@ function UI.CreateAuctionsPane(parent)
         self.incoming:SetText(addon.Money(money))
     end
 
-    -- The countdown ticks once a second while the tab shows. When a payment
-    -- comes due, your auctions are asked for again so the mailed sale drops off.
+    -- The countdowns tick once a second while the tab shows, the line's and
+    -- the sold rows' in view. When a payment comes due, your auctions are
+    -- asked for again so the mailed sale drops off.
     local sinceTick = 0
     pane:SetScript("OnUpdate", function(self, elapsed)
         sinceTick = sinceTick + elapsed
@@ -229,6 +268,10 @@ function UI.CreateAuctionsPane(parent)
         sinceTick = 0
         if due and time() >= due then Auction:QueryOwned() end
         self:UpdateIncoming()
+        self.scrollBox:ForEachFrame(function(row)
+            local data = row.data
+            if data and data.auction then row.arrives:SetText(ArrivesIn(data.auction)) end
+        end)
     end)
 
     function pane:Refresh()
@@ -244,6 +287,9 @@ function UI.CreateAuctionsPane(parent)
         self.listed:SetText(addon.Money(Listed()))
         self:UpdateIncoming()
         self.refresh:SetEnabled(Auction:CanAct() and not Auction:IsScanning())
+        local undercut = #Undercut()
+        self.cancelNext:SetText(undercut > 0 and ("Cancel next undercut (%d)"):format(undercut) or "Cancel next undercut")
+        self.cancelNext:SetEnabled(undercut > 0 and Auction:CanAct() and not Auction:Busy())
     end
 
     pane:SetScript("OnShow", function(self)

@@ -73,6 +73,64 @@ function UI.ModifiedClick(itemID)
     end
 end
 
+local UNITS = { g = 10000, s = 100, c = 1 }
+
+-- Copper from "12g 50s 3c", "50s" or a number of gold like "12.5"; nil for
+-- anything else, and for nothing at all. The prompts for a price take it.
+function UI.ParseMoney(text)
+    text = strtrim(text):lower()
+    local copper = tonumber(text)
+    if copper then
+        copper = copper * 10000
+    else
+        local found = false
+        copper = 0
+        local rest = text:gsub("(%d+%.?%d*)%s*([gsc])", function(amount, unit)
+            copper = copper + tonumber(amount) * UNITS[unit]
+            found = true
+            return ""
+        end)
+        if not found or rest:find("%S") then return nil end
+    end
+    copper = math.floor(copper + 0.5)
+    if copper > 0 then return copper end
+end
+
+-- "12g 50s", as ParseMoney takes it back.
+function UI.PlainMoney(copper)
+    local g, s, c = math.floor(copper / 10000), math.floor(copper / 100) % 100, copper % 100
+    local parts = {}
+    if g > 0 then parts[#parts + 1] = g .. "g" end
+    if s > 0 then parts[#parts + 1] = s .. "s" end
+    if c > 0 or #parts == 0 then parts[#parts + 1] = c .. "c" end
+    return table.concat(parts, " ")
+end
+
+-- An item's floor for Stay cheapest: set your own, or go back to break-even.
+-- From the Stay cheapest tab's rows.
+function UI.ShowFloorMenu(owner, itemID)
+    MenuUtil.CreateContextMenu(owner, function(_, root)
+        local floor, own = addon:Floor(itemID)
+        root:CreateButton("Set floor...", function()
+            addon:Prompt(("Least to post one %s at, like 12g 50s:"):format(addon:ItemName(itemID) or "item"),
+                floor and UI.PlainMoney(floor) or "", function(text)
+                    local copper = UI.ParseMoney(text)
+                    if copper then
+                        addon.db.floors[itemID] = copper
+                        addon:Refresh()
+                    else
+                        addon:SetStatus("Not a price: " .. text)
+                    end
+                end)
+        end)
+        local breakEven = addon:BreakEven(itemID)
+        root:CreateButton(breakEven and "Break-even, " .. addon.Money(breakEven, true) or "No floor", function()
+            addon.db.floors[itemID] = nil
+            addon:Refresh()
+        end):SetEnabled(own)
+    end)
+end
+
 --------------------------------------------------------------------------------
 -- Icon buttons on Blizzard's frames
 --------------------------------------------------------------------------------

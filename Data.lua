@@ -24,14 +24,18 @@ local LISTED_KEEP = 86400       -- a character's listed counts lapse after a day
 local function Defaults()
     return {
         schema = SCHEMA,
-        lists = {},        -- { name, collapsed, notForSale, entries = { entry, ... } };
-                           -- Next on the Sell tab skips a list marked notForSale
+        lists = {},        -- { name, collapsed, notForSale, snipe, stay, entries = { entry, ... } };
+                           -- Next on the Sell tab skips a list marked notForSale, the
+                           -- Snipe tab watches the items of a list marked snipe, and the
+                           -- Stay cheapest tab keeps those of a list marked stay cheapest
         prices = {},       -- [itemID] = { p = copper per unit, t = time() }
         vendor = {},       -- [itemID] = copper per unit, unlimited vendor supply
         commodity = {},    -- [itemID] = true for commodities, false for items
         listed = {},       -- [character] = { t = time(), items = { [itemID] = n } }
-        recipes = {},      -- [itemID] = { reagents, yield }: what your characters' learned
-                           -- recipes make, saved from their profession windows
+        recipes = {},      -- [itemID] = { recipeID, prof, reagents, yield }: what your characters'
+                           -- learned recipes make, saved from their profession windows
+        cooldowns = {},    -- [recipeID] = true for a recipe with a cooldown, like a transmute:
+                           -- it never makes a reagent for another craft
         sales = {},        -- { t, itemID, name, count, price, cut, cost, char }, oldest first,
                            -- kept for good; from the auction house's mail (Sales.lua)
         purchases = {},    -- { t, itemID, count, price, char }, oldest first, kept for good;
@@ -42,6 +46,10 @@ local function Defaults()
                            -- prices, each packed into a string (History.lua); kept for good
         minimap = { hide = false }, -- LibDBIcon's settings: hide, minimapPos
         duration = 2,      -- 1, 2, 3 = 2, 8, 24 hours
+        snipe = { cut = 30, max = {} }, -- the Snipe tab: an item's max is cut percent under its
+                           -- usual price unless max[itemID] holds your own, copper per unit
+        floors = {},       -- [itemID] = copper per unit: the Stay cheapest tab never posts under
+                           -- it; without one, under break-even
         -- lastFullScan = time() of the last whole-house snapshot, for its cooldown
         -- window = where you moved the window, away from the auction house
         -- auctionTab = true when the auction house last closed on this addon's tab
@@ -165,12 +173,23 @@ function addon:MoveEntryToList(entry, fromList, toList)
     self:ListsChanged()
 end
 
--- Every item a list deals in: its entries and their reagents.
+-- Every item a list deals in: its entries, their reagents, and the reagents
+-- of any reagent one of your recipes makes, so a price check can weigh
+-- buying it against crafting it.
 function addon:ListItemIDs(list, into)
     into = into or {}
+    local opened = {}
+    local function AddReagents(reagents)
+        for _, reagent in ipairs(reagents or {}) do
+            into[#into + 1] = reagent.itemID
+            local craft = not opened[reagent.itemID] and self:ReagentCraft(reagent.itemID)
+            opened[reagent.itemID] = true
+            if craft then AddReagents(craft.reagents) end
+        end
+    end
     for _, entry in ipairs(list.entries) do
         if entry.itemID then into[#into + 1] = entry.itemID end
-        for _, reagent in ipairs(entry.reagents or {}) do into[#into + 1] = reagent.itemID end
+        AddReagents(entry.reagents)
     end
     return into
 end
@@ -200,11 +219,13 @@ end
 -- Prices
 --------------------------------------------------------------------------------
 
--- count, how many were up, goes to the price history when the source knows it.
-function addon:SetPrice(itemID, copper, count)
+-- count, how many were up, goes to the price history when the source knows
+-- it. noHistory: the snipe rounds' prices stay out of the history, or the
+-- odd cheap offer they look for would become the usual price.
+function addon:SetPrice(itemID, copper, count, noHistory)
     if not itemID or not copper or copper <= 0 then return end
     self.db.prices[itemID] = { p = copper, t = time() }
-    self:RecordHistory(itemID, copper, count)
+    if not noHistory then self:RecordHistory(itemID, copper, count) end
     self:Refresh()
 end
 
@@ -248,17 +269,57 @@ function addon:CraftFor(itemID)
     return itemID and (self:Index().crafts[itemID] or self.db.recipes[itemID])
 end
 
--- The cheaper of buying a reagent and crafting it from another list entry.
+-- What crafts an item that another craft takes: as CraftFor, but never a
+-- recipe with a cooldown, which makes one a day at most.
+function addon:ReagentCraft(itemID)
+    if not itemID then return nil end
+    local cooldowns = self.db.cooldowns
+    local entry = self:Index().crafts[itemID]
+    if entry and not cooldowns[entry.recipeID] then return entry end
+    local known = self.db.recipes[itemID]
+    if known and not cooldowns[known.recipeID] then return known end
+end
+
+-- The price each that pays back what one cost you after the cut: its craft
+-- cost once every reagent has a price, else what you paid for them on
+-- average. Nil without either.
+function addon:BreakEven(itemID)
+    local craft = self:CraftFor(itemID)
+    local cost, complete
+    if craft then cost, complete = self:CraftCost(craft) end
+    if not (cost and complete) then
+        local bought = self:PurchaseStats(itemID)
+        cost = bought and bought.total / bought.units
+    end
+    if cost then return math.ceil(cost * 100 / 95) end
+end
+
+-- The least Stay cheapest posts at: your own floor, else break-even; nil
+-- without either. own: the floor is yours.
+function addon:Floor(itemID)
+    local own = self.db.floors[itemID]
+    if own then return own, true end
+    return self:BreakEven(itemID), false
+end
+
+-- The cheaper of buying a reagent and crafting it with one of your recipes,
+-- whether every price was known, and the recipe when crafting wins.
 function addon:ReagentCost(itemID, visiting)
     local price = self:BuyPrice(itemID)
-    local craft = self:Index().crafts[itemID]
+    local craft = self:ReagentCraft(itemID)
     if craft then
         local cost, complete = self:CraftCost(craft, visiting)
-        if cost and complete and (not price or cost < price) then return cost, true end
-        if not price and cost then return cost, false end
+        if cost and complete and (not price or cost < price) then return cost, true, craft end
+        if not price and cost then return cost, false, craft end
     end
     if price then return price, true end
     return nil, false
+end
+
+-- The recipe a list makes a reagent with: one of yours, when crafting costs
+-- less than buying, or when there is no price to buy it at.
+function addon:CraftedReagent(itemID)
+    return (select(3, self:ReagentCost(itemID)))
 end
 
 -- What one sale brings in after the 5% auction house cut, minus the cost.
@@ -337,10 +398,16 @@ function addon:CraftBatch(entry)
     return math.min(math.max(planned, 1), self:CraftableCount(entry) or 0), planned
 end
 
--- Every planned craft, in the order of your lists.
+-- Every planned craft, in the order of your lists. A list's sub-crafts
+-- (Needs) come ahead of its crafts, a reagent's own sub-crafts before it,
+-- marked sub: their count follows from the list, not a plan of their own.
 function addon:Queue()
     local queue = {}
     for _, list in ipairs(self.db.lists) do
+        local _, subs = self:Needs(list)
+        for i = #subs, 1, -1 do
+            queue[#queue + 1] = { list = list, entry = subs[i], sub = true }
+        end
         for _, entry in ipairs(list.entries) do
             if entry.recipeID and self:Planned(entry) > 0 then
                 queue[#queue + 1] = { list = list, entry = entry }
@@ -350,15 +417,73 @@ function addon:Queue()
     return queue
 end
 
--- How many of an item a list's planned crafts use in all.
-function addon:Need(list, itemID)
-    local need = 0
+-- A list's sub-craft of an item, as an entry the queue can craft: the same
+-- table from one redraw to the next, kept while the list exists and never
+-- saved. make is the crafts the list still lacks.
+local subEntries = setmetatable({}, { __mode = "k" })
+
+local function SubEntry(list, itemID, recipe, crafts)
+    local subs = subEntries[list]
+    local sub = subs[itemID]
+    if not sub then
+        sub = { itemID = itemID, sub = true }
+        subs[itemID] = sub
+    end
+    sub.recipeID, sub.prof, sub.reagents, sub.yield = recipe.recipeID, recipe.prof, recipe.reagents, recipe.yield
+    sub.make = crafts
+    return sub
+end
+
+-- What a list's planned crafts use in all, by item, and its sub-crafts. A
+-- reagent you craft (CraftedReagent) is a sub-craft for the part that your
+-- bags and the list's own planned crafts of it don't cover, and passes
+-- that on to its own reagents. Sub-crafts come before the ones they use.
+function addon:Needs(list)
+    local needs, made, subs = {}, {}, {}
+    -- One that's no longer needed keeps no count.
+    subEntries[list] = subEntries[list] or {}
+    for _, sub in pairs(subEntries[list]) do sub.make = nil end
+
+    -- The items in an order where every craft that uses one comes before
+    -- it, so its need is whole by the time it is passed on; otherwise in
+    -- the list's order.
+    local order, seen = {}, {}
+    local function Visit(itemID)
+        if seen[itemID] then return end
+        seen[itemID] = true
+        local craft = self:CraftedReagent(itemID)
+        for _, reagent in ipairs(craft and craft.reagents or {}) do Visit(reagent.itemID) end
+        table.insert(order, 1, itemID)
+    end
+
     for _, entry in ipairs(list.entries) do
-        for _, reagent in ipairs(entry.reagents or {}) do
-            if reagent.itemID == itemID then need = need + reagent.count * self:Planned(entry) end
+        local planned = self:Planned(entry)
+        if planned > 0 then
+            if entry.itemID then made[entry.itemID] = (made[entry.itemID] or 0) + planned * (entry.yield or 1) end
+            for _, reagent in ipairs(entry.reagents or {}) do
+                needs[reagent.itemID] = (needs[reagent.itemID] or 0) + reagent.count * planned
+                Visit(reagent.itemID)
+            end
         end
     end
-    return need
+
+    for _, itemID in ipairs(order) do
+        local craft = self:CraftedReagent(itemID)
+        local short = craft and (needs[itemID] or 0) - self:BagCount(itemID) - (made[itemID] or 0) or 0
+        if short > 0 then
+            local crafts = math.ceil(short / (craft.yield or 1))
+            for _, reagent in ipairs(craft.reagents) do
+                needs[reagent.itemID] = (needs[reagent.itemID] or 0) + reagent.count * crafts
+            end
+            subs[#subs + 1] = SubEntry(list, itemID, craft, crafts)
+        end
+    end
+    return needs, subs
+end
+
+-- How many of an item a list's planned crafts use in all.
+function addon:Need(list, itemID)
+    return self:Needs(list)[itemID] or 0
 end
 
 -- What the list still lacks after your bags.

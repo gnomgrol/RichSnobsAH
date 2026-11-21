@@ -23,16 +23,42 @@ end
 
 local saved = {} -- recipe IDs saved this session, so each is read once
 
+-- Whether a recipe has a cooldown. The game shows one only while it runs
+-- (or as charges), so a transmute counts by its name before its first use;
+-- a spell's base cooldown, where the client has it, counts at any time.
+local function CooldownOf(recipeID, name)
+    if type(name) == "string" and name:find("^Transmute") then return true end
+    local cooldown, _, _, maxCharges = Call(C_TradeSkillUI.GetRecipeCooldown, recipeID)
+    if (cooldown and cooldown > 0) or (maxCharges and maxCharges > 0) then return true end
+    local base = Call(GetSpellBaseCooldown, recipeID)
+    return base ~= nil and base > 0
+end
+
+local function HasCooldown(recipeID, name)
+    local ok, cooldown = pcall(CooldownOf, recipeID, name)
+    return ok and cooldown == true
+end
+
 -- Learned recipes are saved with what they make, so tooltips and the Sell
--- tab know your crafts while the window is closed, on any of your characters.
+-- tab know your crafts while the window is closed, on any of your characters,
+-- and the queue can craft a reagent your lists need. A cooldown is noted for
+-- good, on any look, since it shows only while it runs.
 local function SaveLearned(ids)
+    local cooldowns = addon.db.cooldowns
     for _, id in ipairs(ids) do
+        if saved[id] and not cooldowns[id] and HasCooldown(id) then cooldowns[id] = true end
         local info = not saved[id] and Call(C_TradeSkillUI.GetRecipeInfo, id)
         if info and info.learned then
             saved[id] = true
+            if not cooldowns[id] and HasCooldown(id, info.name) then cooldowns[id] = true end
             local recipe = Prof:ReadRecipe(id)
-            if recipe and recipe.itemID and #recipe.reagents > 0 then
-                addon.db.recipes[recipe.itemID] = { reagents = recipe.reagents, yield = recipe.yield }
+            -- A recipe with a cooldown leaves any other one that makes the item.
+            local old = recipe and addon.db.recipes[recipe.itemID]
+            local keep = cooldowns[id] and old and old.recipeID and old.recipeID ~= id
+            if recipe and recipe.itemID and #recipe.reagents > 0 and not keep then
+                addon.db.recipes[recipe.itemID] = {
+                    recipeID = id, prof = recipe.prof, reagents = recipe.reagents, yield = recipe.yield,
+                }
             end
         end
     end
@@ -149,7 +175,9 @@ end
 -- Whether an entry can be crafted now. If not: why ("open Alchemy first"),
 -- and the spell that opens its profession when that is all it takes.
 function Prof:CraftState(entry)
-    if not entry.recipeID then return false, "not a recipe" end
+    -- A sub-craft by a recipe saved before recipe IDs were: its profession
+    -- window saves it again.
+    if not entry.recipeID then return false, entry.sub and "open its profession once" or "not a recipe" end
     if not openRecipes or not openRecipes[entry.recipeID] then
         -- Its own profession is open without it: this character lacks it.
         if openRecipes and entry.prof and OpenProfessionName() == entry.prof then
@@ -190,14 +218,17 @@ function Prof:NextQueued()
 end
 
 -- The planned entry a finished craft counts against: the one last crafted
--- from the addon, else the first in the queue with that recipe.
+-- from the addon, else the first in your lists with that recipe. Sub-crafts
+-- have no plan; theirs shrink as the crafts fill your bags. This runs on
+-- every spell you cast, so it skips working out the queue.
 local function PlannedEntryFor(recipeID)
     local first
-    for _, queued in ipairs(addon:Queue()) do
-        local entry = queued.entry
-        if entry.recipeID == recipeID then
-            if entry == lastCrafted then return entry end
-            first = first or entry
+    for _, list in ipairs(addon.db.lists) do
+        for _, entry in ipairs(list.entries) do
+            if entry.recipeID == recipeID and addon:Planned(entry) > 0 then
+                if entry == lastCrafted then return entry end
+                first = first or entry
+            end
         end
     end
     return first

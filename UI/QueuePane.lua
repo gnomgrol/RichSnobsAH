@@ -1,6 +1,8 @@
 -- The Queue tab: every craft with a plan, in the order of your lists, and a
 -- button that crafts them one after another. The game wants a click for each
--- batch, so each press starts one; plans count down as crafts finish.
+-- batch, so each press starts one; plans count down as crafts finish. Ahead
+-- of a list's crafts come its sub-crafts: the reagents they need that you
+-- craft yourself, as many as your bags lack.
 
 local _, addon = ...
 local UI = addon.UI
@@ -30,7 +32,8 @@ local function Status(entry, craftable)
     return "Ready", GREEN
 end
 
-local function ShowMenu(row, entry)
+local function ShowMenu(row, data)
+    local entry = data.entry
     MenuUtil.CreateContextMenu(row, function(_, root)
         root:CreateTitle(addon:EntryName(entry))
         local can, why = addon.Prof:CraftState(entry)
@@ -38,7 +41,8 @@ local function ShowMenu(row, entry)
         root:CreateButton(can and UI.CraftLabel(count, planned) or ("Craft: %s"):format(why), function()
             addon.Prof:Craft(entry, count)
         end):SetEnabled(can and count > 0)
-        UI.AddPlanButtons(root, entry)
+        -- A sub-craft's count follows from its list, so it has no plan to set.
+        if not data.sub then UI.AddPlanButtons(root, entry) end
     end)
 end
 
@@ -47,7 +51,7 @@ local function OnRowClick(row, button)
     if not data then return end
     local entry = data.entry
     if button == "RightButton" then
-        ShowMenu(row, entry)
+        ShowMenu(row, data)
     elseif not UI.ModifiedClick(entry.itemID) then
         -- Selected here as in Lists, so the Craft button there and the
         -- right-hand tabs show it too.
@@ -64,7 +68,7 @@ local function OnRowEnter(row)
     else
         GameTooltip:SetText(addon:EntryName(data.entry))
     end
-    GameTooltip:AddLine(("On %s"):format(data.list.name), 1, 1, 1)
+    GameTooltip:AddLine((data.sub and "A reagent for the crafts on %s" or "On %s"):format(data.list.name), 1, 1, 1)
     GameTooltip:Show()
 end
 

@@ -277,6 +277,8 @@ function UI.CreateSellPane(parent)
 
         local deposit = itemID and quantity > 0 and Auction:Deposit(itemID, location, commodity, addon.db.duration, quantity)
         self.deposit:SetText(deposit and addon.Money(deposit, true) or "")
+        -- The Stay cheapest tab sets the same duration.
+        self.duration:Update()
 
         local craft = addon:CraftFor(itemID)
         local cost, complete

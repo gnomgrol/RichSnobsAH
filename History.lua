@@ -1,6 +1,6 @@
 -- Price history: a point per item per day from every price the addon sees
--- (full scans, price checks, searches), holding the day's lowest price and
--- how many were up. Days older than the last 30 merge into one point per
+-- (full scans, price checks, searches; not the snipe rounds', which hunt for
+-- the odd cheap offer), holding the day's lowest price and how many were up. Days older than the last 30 merge into one point per
 -- week. Each item's points are packed into strings, so years of them stay
 -- small and quick to load.
 
@@ -8,6 +8,7 @@ local _, addon = ...
 
 local DAY = 86400
 local DAILY_DAYS = 30 -- one point a day this far back, one a week before that
+local USUAL_DAYS = 3  -- days of prices a usual price needs
 
 --[[ db.history.days[itemID]  = the daily points, at most 36
      db.history.weeks[itemID] = the weekly points before them
@@ -166,4 +167,17 @@ function addon:PriceStats(itemID, days)
     if stats.days == 0 then return nil end
     stats.avg = stats.total / stats.days
     return stats
+end
+
+-- The usual price: the middle of the daily lows of the last 30 days, which
+-- leaves out the odd day with a cheap offer. Nil with fewer than 3 days.
+function addon:UsualPrice(itemID)
+    local stats = self:PriceStats(itemID)
+    if not stats or stats.days < USUAL_DAYS then return nil end
+    local prices = {}
+    for _, price in pairs(stats.byDay) do prices[#prices + 1] = price end
+    table.sort(prices)
+    local n = #prices
+    if n % 2 == 1 then return prices[(n + 1) / 2] end
+    return math.floor((prices[n / 2] + prices[n / 2 + 1]) / 2)
 end

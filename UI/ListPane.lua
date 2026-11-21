@@ -1,7 +1,8 @@
 -- The left side of the window: every list as a section you can fold, its
 -- crafts and items as rows of numbers, and reagents under each craft, shown
--- by clicking it. Right-click a row for its actions; drag rows to reorder
--- them; drop an item from your bags to add it.
+-- by clicking it; a reagent you craft has its own reagents under it.
+-- Right-click a row for its actions; drag rows to reorder them; drop an
+-- item from your bags to add it.
 
 local _, addon = ...
 local UI = addon.UI
@@ -16,9 +17,11 @@ local WHITE = { 1, 1, 1 }
 local GRAY = { 0.5, 0.5, 0.5 }
 local GREEN = { 0.25, 0.9, 0.25 }
 local RED = { 1, 0.3, 0.3 }
+local YELLOW = { 1, 0.82, 0 }
 
 local COLUMNS = {
-    { key = "have", label = "Have", width = 50, tip = "In your bags. Reagents of a planned craft: in bags / needed" },
+    { key = "have", label = "Have", width = 50,
+        tip = "In your bags. Reagents of a planned craft: in bags / needed, yellow if you craft the rest" },
     { key = "listed", label = "Listed", width = 42, tip = "On the auction house, all your characters, as of today's visits" },
     { key = "craft", label = "Craft", width = 40, tip = "Crafts the reagents in your bags allow" },
     { key = "cost", label = "Cost", width = 64, tip = "Craft cost per item; gray if a reagent has no price yet" },
@@ -65,6 +68,26 @@ local function SortedEntries(list)
     return sorted
 end
 
+-- A craft's reagents, as many as crafts of it need. Under a reagent you
+-- craft (addon:CraftedReagent), its own reagents a step further in, for
+-- the crafts your bags leave to make. path holds the items being opened.
+local function AddReagents(elements, list, entry, reagents, depth, crafts, path)
+    for _, reagent in ipairs(reagents or {}) do
+        local craft = not path[reagent.itemID] and addon:CraftedReagent(reagent.itemID)
+        local need = reagent.count * crafts
+        elements[#elements + 1] = {
+            kind = "reagent", list = list, entry = entry, reagent = reagent, itemID = reagent.itemID,
+            depth = depth, need = need, crafted = craft and true,
+        }
+        if craft then
+            path[reagent.itemID] = true
+            local short = math.max(0, need - addon:BagCount(reagent.itemID))
+            AddReagents(elements, list, entry, craft.reagents, depth + 1, math.ceil(short / (craft.yield or 1)), path)
+            path[reagent.itemID] = nil
+        end
+    end
+end
+
 local function BuildElements()
     local elements = {}
     for _, list in ipairs(addon.db.lists) do
@@ -73,11 +96,9 @@ local function BuildElements()
             for _, entry in ipairs(SortedEntries(list)) do
                 elements[#elements + 1] = { kind = "entry", list = list, entry = entry, itemID = entry.itemID }
                 if entry.expanded then
-                    for _, reagent in ipairs(entry.reagents or {}) do
-                        elements[#elements + 1] = {
-                            kind = "reagent", list = list, entry = entry, reagent = reagent, itemID = reagent.itemID,
-                        }
-                    end
+                    local path = {}
+                    if entry.itemID then path[entry.itemID] = true end
+                    AddReagents(elements, list, entry, entry.reagents, 1, addon:Planned(entry), path)
                 end
             end
         end
@@ -99,7 +120,8 @@ local function IsSelected(data)
     local selected = addon.selected
     if not selected then return false end
     if data.kind == "entry" then return selected.entry == data.entry and not selected.reagent end
-    if data.kind == "reagent" then return selected.reagent == data.reagent end
+    -- Two crafts that both make a reagent show the same recipe's reagents.
+    if data.kind == "reagent" then return selected.reagent == data.reagent and selected.entry == data.entry end
     return false
 end
 
@@ -165,6 +187,16 @@ local function ListMenu(root, list)
     -- Next on the Sell tab skips this list's items, unless another list has them too.
     root:CreateCheckbox("Not for sale", function() return list.notForSale == true end, function()
         list.notForSale = not list.notForSale or nil
+        addon:Refresh()
+    end)
+    -- The Snipe tab watches this list's items for offers far under their usual price.
+    root:CreateCheckbox("Snipe", function() return list.snipe == true end, function()
+        list.snipe = not list.snipe or nil
+        addon:Refresh()
+    end)
+    -- The Stay cheapest tab keeps this list's items the cheapest offers.
+    root:CreateCheckbox("Stay cheapest", function() return list.stay == true end, function()
+        list.stay = not list.stay or nil
         addon:Refresh()
     end)
     root:CreateButton("Rename...", function()
@@ -466,8 +498,9 @@ local function UpdateRow(row, data)
         row.name:SetPoint("LEFT", row.toggle, "RIGHT", 4, 0)
         row.name:SetPoint("RIGHT", -4, 0)
         local list = data.list
-        row.name:SetText(("%s  |cff808080%d%s|r"):format(list.name, #list.entries,
-            list.notForSale and "  not for sale" or ""))
+        row.name:SetText(("%s  |cff808080%d%s%s%s|r"):format(list.name, #list.entries,
+            list.notForSale and "  not for sale" or "", list.snipe and "  snipe" or "",
+            list.stay and "  stay cheapest" or ""))
         return
     end
 
@@ -480,7 +513,7 @@ local function UpdateRow(row, data)
         return
     end
 
-    local left = kind == "reagent" and 2 * INDENT or INDENT
+    local left = kind == "reagent" and (1 + data.depth) * INDENT or INDENT
     row.icon:SetPoint("LEFT", left + 4, 0)
     row.icon:Show()
     row.name:SetPoint("LEFT", row.icon, "RIGHT", 4, 0)
@@ -501,22 +534,21 @@ local function UpdateRow(row, data)
     end
 
     -- A reagent: have against what the planned crafts need (just have when
-    -- none is planned), its buy price, and its craft cost when another entry
-    -- makes it.
+    -- they need none), yellow when you craft the rest; its buy price, and its
+    -- craft cost when one of your recipes makes it.
     local reagent = data.reagent
     row.icon:SetTexture(addon:ItemIcon(reagent.itemID))
     row.name:SetText(("%dx %s"):format(reagent.count, addon:ItemName(reagent.itemID) or "..."))
     row.name:SetTextColor(addon:QualityColor(reagent.itemID))
-    local have, planned = addon:BagCount(reagent.itemID), addon:Planned(entry)
-    if planned > 0 then
-        local need = reagent.count * planned
-        SetCell(row, "have", ("%d/%d"):format(have, need), have >= need and GREEN or RED)
+    local have, need = addon:BagCount(reagent.itemID), data.need
+    if need > 0 then
+        SetCell(row, "have", ("%d/%d"):format(have, need), have >= need and GREEN or data.crafted and YELLOW or RED)
     else
         SetCount(row, "have", have)
     end
     local price = addon:BuyPrice(reagent.itemID)
     if price then SetCell(row, "price", addon.Money(price)) end
-    local craft = addon:Index().crafts[reagent.itemID]
+    local craft = addon:ReagentCraft(reagent.itemID)
     if craft and craft ~= entry then
         local cost, complete = addon:CraftCost(craft)
         if cost then SetCell(row, "cost", addon.Money(cost), complete and WHITE or GRAY) end

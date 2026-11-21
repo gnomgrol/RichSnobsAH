@@ -69,7 +69,7 @@ local function SetPending(kind, value)
     C_Timer.After(PENDING_TIMEOUT, function()
         if Auction[kind] == value then
             Auction[kind] = nil
-            addon:SetStatus("No answer from the auction house; check the Cancel tab")
+            addon:SetStatus("No answer from the auction house; check the Auctions tab")
             addon:Refresh()
         end
     end)
@@ -89,12 +89,14 @@ local scan
 local waitingScans = {}
 
 -- Prices items in batched browse requests. Vendor-bought items are skipped
--- unless options.includeVendor. options.onBatch(found) gets each answer as
--- [itemID] = cheapest unit price; options.onDone runs at the end.
+-- unless options.includeVendor. options.onBatch(found, batch) gets each
+-- answer as [itemID] = cheapest unit price, with the item IDs asked for;
+-- options.onDone runs at the end. A quiet check, the snipe rounds', says
+-- nothing on the status line and leaves the price history alone.
 function Auction:ScanPrices(itemIDs, label, options)
     options = options or {}
     if not self.isOpen then
-        addon:SetStatus("Open the auction house to check prices")
+        if not options.quiet then addon:SetStatus("Open the auction house to check prices") end
         return false
     end
 
@@ -106,7 +108,7 @@ function Auction:ScanPrices(itemIDs, label, options)
         end
     end
     if #ids == 0 then
-        addon:SetStatus(("Nothing to check in %s"):format(label))
+        if not options.quiet then addon:SetStatus(("Nothing to check in %s"):format(label)) end
         if options.onDone then options.onDone() end
         return false
     end
@@ -126,8 +128,13 @@ function Auction:ScanPrices(itemIDs, label, options)
     return true
 end
 
+-- A check you started, running or waiting; the snipe rounds don't count.
 function Auction:IsScanning()
-    return scan ~= nil
+    if scan and not scan.options.quiet then return true end
+    for _, job in ipairs(waitingScans) do
+        if not job.options.quiet then return true end
+    end
+    return false
 end
 
 function Auction:NextBatch()
@@ -135,9 +142,10 @@ function Auction:NextBatch()
     if not current then return end
     current.index = current.index + 1
     local batch = current.batches[current.index]
+    local quiet = current.options.quiet
 
     if not batch then
-        addon:SetStatus(("Prices checked: %s"):format(current.label))
+        if not quiet then addon:SetStatus(("Prices checked: %s"):format(current.label)) end
         if current.options.onDone then current.options.onDone() end
         scan = table.remove(waitingScans, 1)
         if scan then self:NextBatch() end
@@ -145,7 +153,9 @@ function Auction:NextBatch()
         return
     end
 
-    addon:SetStatus(("Checking prices: %s"):format(current.label), current.index - 1, #current.batches)
+    if not quiet then
+        addon:SetStatus(("Checking prices: %s"):format(current.label), current.index - 1, #current.batches)
+    end
     Send(function()
         if scan ~= current then return end
         local keys = {}
@@ -169,10 +179,9 @@ function Auction:NextBatch()
     end)
 end
 
--- Every browse answer, ours or one from Blizzard's frame, updates prices.
--- An item can have several results (one per item key); withCounts adds up
--- how many are up, for a full answer only, since a later page holds the rest.
-local function RecordBrowse(results, withCounts)
+-- The cheapest unit price per item in browse results, and how many are up.
+-- An item can have several results (one per item key).
+local function Cheapest(results)
     local found, counts = {}, {}
     for _, result in ipairs(results or {}) do
         local itemID = result.itemKey and result.itemKey.itemID
@@ -182,10 +191,17 @@ local function RecordBrowse(results, withCounts)
             counts[itemID] = (counts[itemID] or 0) + (result.totalQuantity or 0)
         end
     end
+    return found, counts
+end
+
+-- Every browse answer, ours or one from Blizzard's frame, updates prices.
+-- counts go to the history for a full answer only, since a later page
+-- holds the rest.
+local function Record(found, counts, noHistory)
     for itemID, price in pairs(found) do
-        addon:SetPrice(itemID, price, withCounts and counts[itemID] > 0 and counts[itemID] or nil)
+        local count = counts and counts[itemID] > 0 and counts[itemID] or nil
+        addon:SetPrice(itemID, price, count, noHistory)
     end
-    return found
 end
 
 -- A browse from Blizzard's frame can land while a batch waits. An answer
@@ -199,17 +215,21 @@ local function AnswersBatch(found, batch)
 end
 
 addon:On("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", function()
-    local found = RecordBrowse(C_AuctionHouse.GetBrowseResults(), true)
+    local found, counts = Cheapest(C_AuctionHouse.GetBrowseResults())
     local current = scan
-    if current and current.waiting and AnswersBatch(found, current.waiting) then
+    local batch = current and current.waiting
+    local ours = batch and AnswersBatch(found, batch)
+    Record(found, counts, ours and current.options.quiet)
+    if ours then
         current.waiting = nil
-        if current.options.onBatch then current.options.onBatch(found) end
+        if current.options.onBatch then current.options.onBatch(found, batch) end
         Auction:NextBatch()
     end
 end)
 
 addon:On("AUCTION_HOUSE_BROWSE_RESULTS_ADDED", function(added)
-    RecordBrowse(added)
+    local found = Cheapest(added)
+    Record(found)
 end)
 
 --------------------------------------------------------------------------------
@@ -332,10 +352,14 @@ end)
 -- One item's auctions
 --------------------------------------------------------------------------------
 
+local quietSearches = {} -- [itemID] = true while a quiet search of it waits for its answer
+
 -- A background search, as the undercut check's, leaves "Searching..." to
--- the search a pane waits on.
-function Auction:Search(itemID, background)
+-- the search a pane waits on. A quiet one, a snipe's, also leaves the price
+-- history alone.
+function Auction:Search(itemID, background, quiet)
     if not itemID or not self.isOpen then return false end
+    if quiet then quietSearches[itemID] = true end
     if not background then
         if self.searching == itemID then return true end
         self.searching = itemID
@@ -351,6 +375,7 @@ function Auction:Search(itemID, background)
         local ok, key = pcall(C_AuctionHouse.MakeItemKey, itemID)
         if not (ok and key and pcall(C_AuctionHouse.SendSearchQuery, key, PRICE_SORT, true)) then
             if Auction.searching == itemID then Auction.searching = nil end
+            quietSearches[itemID] = nil
             addon:Refresh()
         end
     end)
@@ -360,7 +385,9 @@ end
 local function Finish(itemID, commodity, rows, partial)
     addon:LearnCommodity(itemID, commodity)
     Auction.results[itemID] = { commodity = commodity, rows = rows, partial = partial, at = GetTime() }
-    if rows[1] then addon:SetPrice(itemID, rows[1].unit) end
+    local quiet = quietSearches[itemID]
+    quietSearches[itemID] = nil
+    if rows[1] then addon:SetPrice(itemID, rows[1].unit, nil, quiet) end
     -- A newer cheapest for an item of yours that was checked, so the
     -- undercut and the count of cheaper offers come from the same answer.
     if rows[1] and Auction.ownedMin[itemID] then Auction.ownedMin[itemID] = rows[1].unit end
@@ -476,6 +503,8 @@ addon:On("COMMODITY_PRICE_UPDATED", function(unitPrice, totalPrice)
     addon:SetStatus(("%d for %s, %s each. Click Confirm to buy."):format(
         quote.quantity, addon.Money(totalPrice), addon.Money(unitPrice, true)))
     addon:Refresh()
+    -- The Snipe tab confirms its own quotes within their max.
+    addon:Fire("QUOTE", quote)
 end)
 
 addon:On("COMMODITY_PRICE_UNAVAILABLE", function()
@@ -689,6 +718,8 @@ end
 -- mode. PostItem silently drops a price with copper in it, so it is rounded
 -- down to whole silver first.
 function Auction:Post(itemID, location, commodity, quantity, unit, duration)
+    -- What it costs, worked out while the item is still in the bags.
+    local deposit = self:Deposit(itemID, location, commodity, duration, quantity)
     local ok, err
     if commodity then
         ok, err = pcall(C_AuctionHouse.PostCommodity, location, duration, quantity, unit)
@@ -702,7 +733,7 @@ function Auction:Post(itemID, location, commodity, quantity, unit, duration)
         addon:SetStatus("The game refused the listing: " .. tostring(err):gsub("^.-:%d+: ", ""))
         return false
     end
-    SetPending("posting", { itemID = itemID, quantity = quantity, unit = unit })
+    SetPending("posting", { itemID = itemID, quantity = quantity, unit = unit, deposit = deposit })
     addon:SetStatus("Posting...")
     addon:Refresh()
     return true
@@ -714,6 +745,7 @@ addon:On("AUCTION_HOUSE_AUCTION_CREATED", function()
     Auction.posting = nil
     addon:SetStatus(("Posted %d %s at %s each"):format(posting.quantity,
         addon:ItemName(posting.itemID) or "", addon.Money(posting.unit, true)))
+    addon:Fire("POSTED", posting)
     Auction:Search(posting.itemID)
     Auction:QueryOwned()
 end)
@@ -866,9 +898,19 @@ function Auction:Cancel(auctionID)
 end
 
 addon:On("AUCTION_CANCELED", function()
-    if not Auction.canceling then return end
+    local auctionID = Auction.canceling
+    if not auctionID then return end
     Auction.canceling = nil
+    -- It leaves the list at once, so a quick next click can't pick it again
+    -- before your auctions are in.
+    for i, auction in ipairs(Auction.owned or {}) do
+        if auction.auctionID == auctionID then
+            table.remove(Auction.owned, i)
+            break
+        end
+    end
     addon:SetStatus("Auction canceled; it comes back by mail")
+    addon:Refresh()
     Auction:QueryOwned()
 end)
 
@@ -894,6 +936,7 @@ addon:On("AUCTION_HOUSE_CLOSED", function()
     Auction.buying, Auction.posting, Auction.canceling, Auction.searching = nil, nil, nil, nil
     -- Offers and auction IDs go stale away from the auction house.
     wipe(Auction.results)
+    wipe(quietSearches)
     wipe(Auction.ownedMin)
     Auction.owned = nil
     addon:SetStatus("")
