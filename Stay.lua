@@ -5,7 +5,8 @@
 -- held against your own lowest price. Under it, you were undercut; over it,
 -- your cheapest one is gone, most likely sold. Either plays a sound, and
 -- Post next puts up one more of the first item that needs it, a step under
--- the cheapest, never under its floor.
+-- the cheapest, never under its floor. With none left in your bags, Cancel
+-- extras takes down all of an item's auctions but your cheapest.
 
 local _, addon = ...
 local Auction = addon.Auction
@@ -136,6 +137,34 @@ function Stay:PostNext()
         return
     end
     Auction:Post(itemID, location, commodity, 1, self:Price(itemID, commodity), addon.db.duration)
+end
+
+-- Of the items with none left in your bags, your auctions past the cheapest
+-- one of each: item by item in list order, dearest first. Of two at the
+-- same price the oldest stays, as it's first in line. One without a buyout
+-- is left alone.
+function Stay:Extras()
+    local extras = {}
+    for _, itemID in ipairs(self:Items()) do
+        if not addon:FindInBags(itemID, true) then
+            local mine = {}
+            for _, auction in ipairs(Auction.owned or {}) do
+                if auction.itemID == itemID and not auction.sold and auction.unit then mine[#mine + 1] = auction end
+            end
+            table.sort(mine, function(a, b)
+                if a.unit ~= b.unit then return a.unit > b.unit end
+                return (a.auctionID or 0) > (b.auctionID or 0)
+            end)
+            for i = 1, #mine - 1 do extras[#extras + 1] = mine[i] end
+        end
+    end
+    return extras
+end
+
+-- From a click: the game wants one per cancel.
+function Stay:CancelExtra()
+    local auction = self:Extras()[1]
+    if auction then Auction:Cancel(auction.auctionID) end
 end
 
 --------------------------------------------------------------------------------

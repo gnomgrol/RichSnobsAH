@@ -1,6 +1,8 @@
 -- The price history window: one item's cheapest price over time as a graph,
 -- a point a day for the last 30 days and a point a week before that. Item
--- menus open it, and so does a click on the Prices tab's bars.
+-- menus open it, as do the Buy and Sell tabs' Price history and a click on
+-- the Prices tab's bars. At the auction house it opens docked under the
+-- frame's right corner; elsewhere in the middle of the screen.
 
 local _, addon = ...
 local UI = addon.UI
@@ -17,6 +19,7 @@ local RANGE_DAYS = { 30 }            -- days each range shows; All has none
 local LABEL = { 1, 0.82, 0 }
 
 local frame
+local hooked -- whether the auction frame's tab changes place it again
 
 local function DateText(day)
     return date("!%b %d", day * DAY)
@@ -188,7 +191,6 @@ local function Create()
     frame.Inset:Hide()
     frame:SetTitle("Price history")
     frame:SetSize(WIDTH, HEIGHT)
-    frame:SetPoint("CENTER")
     frame:SetFrameStrata("HIGH")
     frame:SetToplevel(true)
     frame:EnableMouse(true)
@@ -197,7 +199,10 @@ local function Create()
     if frame.SetDontSavePosition then frame:SetDontSavePosition(true) end
     frame:RegisterForDrag("LeftButton")
     frame:SetScript("OnDragStart", frame.StartMoving)
-    frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
+    frame:SetScript("OnDragStop", function(self)
+        self:StopMovingOrSizing()
+        self.moved = true
+    end)
     tinsert(UISpecialFrames, frame:GetName())
     frame.pools = { grid = { used = 0 }, labels = { used = 0 }, lines = { used = 0 }, dots = { used = 0 } }
 
@@ -261,9 +266,41 @@ local function Create()
     frame.range = #RANGES -- All
 end
 
+-- At the auction house: under the frame with the right edges lined up, so
+-- it grows to the left, and below the frame's tabs where it would cover
+-- one, as on Blizzard's own tabs, which leave the frame narrower. A change
+-- of tab places it again. Elsewhere: the middle of the screen.
+local function Place()
+    frame:ClearAllPoints()
+    local house = AuctionHouseFrame
+    if not (house and house:IsShown()) then
+        frame:SetPoint("CENTER")
+        return
+    end
+    local y = 0
+    local left, bottom = house:GetLeft(), house:GetBottom()
+    for _, tab in ipairs(house.Tabs or {}) do
+        local right, tabBottom = tab:GetRight(), tab:GetBottom()
+        if tab:IsShown() and left and bottom and right and tabBottom and right - left > house:GetWidth() - WIDTH then
+            y = math.min(y, tabBottom - bottom)
+        end
+    end
+    frame:SetPoint("TOPRIGHT", house, "BOTTOMRIGHT", 0, y)
+    if not hooked then
+        hooked = true
+        hooksecurefunc(house, "SetDisplayMode", function()
+            if frame:IsShown() and not frame.moved then Place() end
+        end)
+    end
+end
+
+-- Dragged while open, it stays where it was put; closed, it opens in its
+-- place again.
 function addon:ShowHistory(itemID)
     if not itemID then return end
     if not frame then Create() end
+    if not frame:IsShown() then frame.moved = nil end
+    if not frame.moved then Place() end
     frame.itemID = itemID
     frame:Show()
     frame:Raise()

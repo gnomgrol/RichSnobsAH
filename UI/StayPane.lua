@@ -2,9 +2,11 @@
 -- you have in your bags or up for sale, grouped as To post (the cheapest
 -- isn't yours: undercut, your cheapest gone, or none of yours up), Cheapest
 -- (yours), Under floor, None in bags and Not checked; each with the
--- cheapest offer now, your lowest and its floor. Right-click one for its
--- floor. Below: the round's posts and deposits with the duration, whether
--- the checks run with Start and Stop, and the big Post next.
+-- cheapest offer now (red when it's under yours), your lowest and its
+-- floor. Right-click one for its floor. Below: the round's posts and
+-- deposits with the duration, whether the checks run with Start and Stop,
+-- Cancel extras for the items with none left in your bags, and the big
+-- Post next.
 
 local _, addon = ...
 local UI = addon.UI
@@ -123,7 +125,8 @@ local function UpdateRow(row, data)
     end
 
     -- An item: how many are in your bags, the cheapest offer ("none" when
-    -- nobody has any up), your lowest and the floor.
+    -- nobody has any up; red when it's under yours), your lowest and the
+    -- floor.
     local itemID = data.itemID
     row.icon:SetTexture(addon:ItemIcon(itemID))
     row.icon:Show()
@@ -133,7 +136,8 @@ local function UpdateRow(row, data)
     row.name:SetText(("%s x%d"):format(addon:ItemName(itemID) or "...", addon:BagCount(itemID)))
     for i = 1, 3 do row.cells[i]:SetFontObject("GameFontHighlightSmall") end
     local cheapest, yours, floor = Stay.cheapest[itemID], Stay:Yours(itemID), addon:Floor(itemID)
-    SetCell(row, 1, cheapest and addon.Money(cheapest, true) or cheapest == false and "none" or "-")
+    local now = cheapest and addon.Money(cheapest, true) or cheapest == false and "none" or "-"
+    SetCell(row, 1, now, Stay:State(itemID) == "undercut" and RED or WHITE)
     SetCell(row, 2, yours and addon.Money(yours, true) or "-")
     SetCell(row, 3, floor and addon.Money(floor, true) or "-", data.group.key == "floor" and RED or WHITE)
 end
@@ -174,9 +178,21 @@ function UI.CreateStayPane(parent)
     pane.toggle:SetScript("OnClick", function()
         if Stay.on then Stay:Stop() else Stay:Start() end
     end)
+
+    -- With none left in your bags: the game wants a click for each cancel,
+    -- so each click cancels the first of the extras.
+    pane.cancelExtra = UI.Button(pane, "Cancel extras", 120, 22)
+    pane.cancelExtra:SetPoint("RIGHT", pane.toggle, "LEFT", -6, 0)
+    pane.cancelExtra:SetScript("OnClick", function() Stay:CancelExtra() end)
+    pane.cancelExtra:SetScript("OnEnter", function(self)
+        UI.Tooltip(self, "Cancel extras",
+            "Of each item with none left in your bags, cancels your auctions but the cheapest; one per click")
+    end)
+    pane.cancelExtra:SetScript("OnLeave", GameTooltip_Hide)
+
     pane.state = UI.Text(pane, "GameFontHighlight")
     pane.state:SetPoint("BOTTOMLEFT", 10, 60)
-    pane.state:SetPoint("RIGHT", pane.toggle, "LEFT", -8, 0)
+    pane.state:SetPoint("RIGHT", pane.cancelExtra, "LEFT", -8, 0)
 
     -- One click per post, as the game wants: the first item to post goes up.
     pane.postNext = UI.Button(pane, "Post next", 120, 40)
@@ -245,6 +261,9 @@ function UI.CreateStayPane(parent)
         self.duration:Update()
         self.toggle:SetText(Stay.on and "Stop checking" or "Start checking")
         self.toggle:SetEnabled(Stay.on or (Auction.isOpen and #items > 0))
+        local extras = #Stay:Extras()
+        self.cancelExtra:SetText(extras > 0 and ("Cancel extras (%d)"):format(extras) or "Cancel extras")
+        self.cancelExtra:SetEnabled(extras > 0 and Auction:CanAct() and not Auction:Busy())
         self:UpdateState()
         self:UpdatePostNext()
     end

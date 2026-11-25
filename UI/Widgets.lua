@@ -220,8 +220,9 @@ function UI.TakeCursorItem(onTake)
     return true
 end
 
--- With onDrop, the header is also a slot: an item dropped on it, or clicked
--- onto it, goes to onDrop(itemID, location), and an empty one says so.
+-- The Buy and Sell tabs' item, with Price history at the right. With onDrop,
+-- the header is also a slot: an item dropped on it, or clicked onto it,
+-- goes to onDrop(itemID, location), and an empty one says so.
 function UI.ItemHeader(parent, onDrop)
     local header = CreateFrame("Frame", nil, parent)
     header:SetHeight(28)
@@ -250,8 +251,12 @@ function UI.ItemHeader(parent, onDrop)
         header.iconButton:SetScript("OnReceiveDrag", Drop)
     end
 
+    header.history = UI.Button(header, "Price history", 100, 22)
+    header.history:SetPoint("RIGHT")
+    header.history:SetScript("OnClick", function() addon:ShowHistory(header.itemID) end)
+
     header.note = UI.Text(header, "GameFontDisableSmall", "RIGHT")
-    header.note:SetPoint("RIGHT", -4, 0)
+    header.note:SetPoint("RIGHT", header.history, "LEFT", -6, 0)
 
     header.name = UI.Text(header, "GameFontNormal")
     header.name:SetPoint("LEFT", header.iconButton, "RIGHT", 6, 0)
@@ -268,6 +273,7 @@ function UI.ItemHeader(parent, onDrop)
             self.name:SetText(onDrop and "Drop an item here" or "")
             self.name:SetTextColor(0.5, 0.5, 0.5)
         end
+        self.history:SetEnabled(itemID ~= nil)
         self.note:SetText(note or "")
     end
 
