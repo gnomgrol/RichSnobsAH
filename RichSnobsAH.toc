@@ -20,6 +20,8 @@ History.lua
 Auction.lua
 Snipe.lua
 Stay.lua
+NoDisenchant.lua
+Disenchant.lua
 Professions.lua
 Vendor.lua
 Sales.lua
@@ -34,6 +36,7 @@ UI\SellPane.lua
 UI\AuctionsPane.lua
 UI\SnipePane.lua
 UI\StayPane.lua
+UI\DisenchantPane.lua
 UI\Window.lua
 UI\Tooltip.lua
 UI\Minimap.lua

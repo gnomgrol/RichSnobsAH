@@ -1,8 +1,9 @@
 -- The price history window: one item's cheapest price over time as a graph,
 -- a point a day for the last 30 days and a point a week before that. Item
 -- menus open it, as do the Buy and Sell tabs' Price history and a click on
--- the Prices tab's bars. At the auction house it opens docked under the
--- frame's right corner; elsewhere in the middle of the screen.
+-- the Prices tab's bars; while it is open, it follows the Buy and Sell tabs
+-- to each new item. At the auction house it opens docked under the frame's
+-- right corner; elsewhere in the middle of the screen.
 
 local _, addon = ...
 local UI = addon.UI
@@ -305,6 +306,14 @@ function addon:ShowHistory(itemID)
     frame:Show()
     frame:Raise()
     frame.tabs:Select(frame.range)
+end
+
+-- The Buy or Sell tab moved on to another item: an open history shows it
+-- too, where it is.
+function addon:HistoryFollows(itemID)
+    if not (frame and frame:IsShown()) or frame.itemID == itemID then return end
+    frame.itemID = itemID
+    Draw()
 end
 
 -- New prices, and item names as they load, redraw it.

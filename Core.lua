@@ -108,14 +108,21 @@ end
 --------------------------------------------------------------------------------
 
 local QUESTION_MARK = 134400
+local names = {} -- [itemID] = its name, once the client gave it
 
 -- Nil until the client has the item cached; GET_ITEM_INFO_RECEIVED then
--- redraws whatever asked.
+-- redraws whatever asked. A name once given is kept for the session: the
+-- client drops items from its cache when many are asked for, and hands back
+-- an empty name while it fetches one again.
 function addon:ItemName(itemID)
     if not itemID then return nil end
     local name = C_Item.GetItemNameByID(itemID)
-    if not name then C_Item.RequestLoadItemDataByID(itemID) end
-    return name
+    if name and name ~= "" then
+        names[itemID] = name
+        return name
+    end
+    if not names[itemID] then C_Item.RequestLoadItemDataByID(itemID) end
+    return names[itemID]
 end
 
 function addon:ItemIcon(itemID)

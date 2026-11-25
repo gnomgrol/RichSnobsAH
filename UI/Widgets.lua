@@ -263,6 +263,8 @@ function UI.ItemHeader(parent, onDrop)
     header.name:SetPoint("RIGHT", header.note, "LEFT", -6, 0)
 
     function header:SetItem(itemID, note)
+        -- An open price history moves on with the item.
+        if itemID and itemID ~= self.itemID then addon:HistoryFollows(itemID) end
         self.itemID = itemID
         if itemID then
             self.icon:SetTexture(addon:ItemIcon(itemID))

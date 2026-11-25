@@ -50,6 +50,10 @@ local function Defaults()
                            -- usual price unless max[itemID] holds your own, copper per unit
         floors = {},       -- [itemID] = copper per unit: the Stay cheapest tab never posts under
                            -- it; without one, under break-even
+        disenchant = { armor = true, weapons = true, minItemLevel = 5, maxItemLevel = 999, minProfit = 10000 },
+                           -- the Disenchant tab's scan: the item classes, the item levels from
+                           -- the low end of one band to the high end of another (999: no
+                           -- top), and the least profit a deal leaves, copper
         -- lastFullScan = time() of the last whole-house snapshot, for its cooldown
         -- window = where you moved the window, away from the auction house
         -- auctionTab = true when the auction house last closed on this addon's tab

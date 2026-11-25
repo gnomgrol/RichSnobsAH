@@ -39,6 +39,7 @@ local function ShowTab(index)
     frame.auctions:SetShown(index == 3)
     frame.snipe:SetShown(index == 4)
     frame.stay:SetShown(index == 5)
+    frame.disenchant:SetShown(index == 6)
 end
 
 -- Picking Prices puts the cursor in its search box.
@@ -198,11 +199,12 @@ local function Create()
     frame.auctions = UI.CreateAuctionsPane(frame.right)
     frame.snipe = UI.CreateSnipePane(frame.right)
     frame.stay = UI.CreateStayPane(frame.right)
-    for _, pane in ipairs({ frame.buy, frame.sell, frame.auctions, frame.snipe, frame.stay }) do
+    frame.disenchant = UI.CreateDisenchantPane(frame.right)
+    for _, pane in ipairs({ frame.buy, frame.sell, frame.auctions, frame.snipe, frame.stay, frame.disenchant }) do
         pane:SetPoint("TOPLEFT", 0, -30)
         pane:SetPoint("BOTTOMRIGHT")
     end
-    frame.tabs = UI.Tabs(tabBar, { "Buy", "Sell", "Auctions", "Snipe", "Stay cheapest" }, ShowTab)
+    frame.tabs = UI.Tabs(tabBar, { "Buy", "Sell", "Auctions", "Snipe", "Stay cheapest", "Disenchant" }, ShowTab)
     frame.tabs:Select(1)
 
     MoveContent(frame)
@@ -238,7 +240,7 @@ function addon:Toggle()
 end
 
 -- Shows an item in the right pane. tab: "buy" or "sell" switches to it;
--- otherwise Auctions, Snipe and Stay cheapest give way to Buy.
+-- otherwise Auctions, Snipe, Stay cheapest and Disenchant give way to Buy.
 function addon:Select(selection, tab)
     self.selected = selection
     if frame then

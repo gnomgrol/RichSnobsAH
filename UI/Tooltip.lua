@@ -1,7 +1,9 @@
 -- Item tooltips show the last auction price and its age, the auction prices
 -- of the last 30 days, the vendor price, the craft cost when one of your
 -- lists crafts the item or one of your characters knows its recipe, what you
--- paid for it, and what your sales of it brought.
+-- paid for it, and what your sales of it brought. Gear that disenchants also
+-- shows what its materials bring after the cut, then each material's chance,
+-- amount and price.
 
 local _, addon = ...
 
@@ -50,11 +52,28 @@ local function AddLines(tooltip, itemID)
     end
 end
 
+local function AddDisenchantLines(tooltip, itemID)
+    local DE = addon.Disenchant
+    local materials, estimate = DE:Results(itemID)
+    if not materials then return end
+    local value, complete = DE:Value(materials)
+    local r, g, b = unpack(LABEL)
+    local label = not complete and "Disenchant, prices missing" or estimate and "Disenchant, estimate" or "Disenchant"
+    tooltip:AddDoubleLine(label, value > 0 and addon.Money(value) or "-", r, g, b, 1, 1, 1)
+    for _, material in ipairs(materials) do
+        local amount = material.min == material.max and material.min or ("%d-%d"):format(material.min, material.max)
+        local price = DE:MaterialPrice(material.itemID)
+        tooltip:AddDoubleLine(("   %g%% %s %s"):format(material.percent, amount,
+            addon:ItemName(material.itemID) or "..."), price and addon.Money(price) or "-", 0.8, 0.8, 0.8, 1, 1, 1)
+    end
+end
+
 if TooltipDataProcessor and Enum.TooltipDataType then
     TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, function(tooltip, data)
         if not addon.db or not data or not data.id then return end
         -- The comparison tooltips beside it would repeat the same lines.
         if tooltip ~= GameTooltip and tooltip ~= ItemRefTooltip then return end
         AddLines(tooltip, data.id)
+        AddDisenchantLines(tooltip, data.id)
     end)
 end

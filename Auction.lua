@@ -140,6 +140,7 @@ end
 function Auction:NextBatch()
     local current = scan
     if not current then return end
+    if current.query then return self:NextPage() end
     current.index = current.index + 1
     local batch = current.batches[current.index]
     local quiet = current.options.quiet
@@ -214,9 +215,90 @@ local function AnswersBatch(found, batch)
     return false
 end
 
-addon:On("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", function()
-    local found, counts = Cheapest(C_AuctionHouse.GetBrowseResults())
+--------------------------------------------------------------------------------
+-- Browsing: every page of one query
+--------------------------------------------------------------------------------
+
+-- A browse job's end. Its prices go in from all its pages at once, as an
+-- item's variants, like each "of the Bear", can sit on different pages.
+-- Then the next job starts.
+local function EndBrowse(current, complete)
+    current.waiting = nil
+    local found, counts = Cheapest(current.results)
+    Record(found, complete and counts or nil, current.options.quiet)
+    if not current.options.quiet then
+        addon:SetStatus((complete and "Scanned %s: %d items" or "The scan of %s was cut short: %d items")
+            :format(current.label, #current.results))
+    end
+    if current.options.onDone then current.options.onDone(current.results, complete) end
+    scan = table.remove(waitingScans, 1)
+    if scan then Auction:NextBatch() end
+    addon:Refresh()
+end
+
+-- Browses the house with query, as SendBrowseQuery takes it, page after
+-- page until the house has sent them all. options.onDone(results, complete)
+-- gets every result; complete is false when a page never came.
+-- options.onProgress(results) gets the results so far, as it starts and
+-- after each page. It waits its turn with the price checks, as one of them
+-- would.
+function Auction:Browse(query, label, options)
+    options = options or {}
+    if not self.isOpen then return false end
+    query.sorts = query.sorts or PRICE_SORT
+    local job = { query = query, label = label, options = options, results = {}, pages = 0 }
+    if scan then
+        waitingScans[#waitingScans + 1] = job
+        return true
+    end
+    scan = job
+    self:NextBatch()
+    return true
+end
+
+-- A browse job's next request: its query, then a page more after each
+-- answer until the house has sent them all.
+function Auction:NextPage()
     local current = scan
+    if not (current and current.query) then return end
+    if current.options.onProgress then current.options.onProgress(current.results) end
+    if current.pages > 0 and C_AuctionHouse.HasFullBrowseResults() then return EndBrowse(current, true) end
+    if not current.options.quiet then
+        addon:SetStatus(#current.results > 0 and ("Scanning %s: %d items"):format(current.label, #current.results)
+            or ("Scanning %s..."):format(current.label))
+    end
+    Send(function()
+        if scan ~= current then return end
+        local token = {}
+        current.waiting = token
+        local ok
+        if current.pages == 0 then
+            ok = pcall(C_AuctionHouse.SendBrowseQuery, current.query)
+        else
+            ok = pcall(C_AuctionHouse.RequestMoreBrowseResults)
+        end
+        if not ok then return EndBrowse(current, false) end
+        C_Timer.After(ANSWER_TIMEOUT, function()
+            if scan == current and current.waiting == token then EndBrowse(current, false) end
+        end)
+    end)
+end
+
+addon:On("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", function()
+    local results = C_AuctionHouse.GetBrowseResults()
+    local current = scan
+    if current and current.query then
+        if current.waiting and current.pages == 0 then
+            -- A browse job's first page.
+            current.waiting, current.pages, current.results = nil, 1, results
+            Auction:NextPage()
+            return
+        elseif current.pages > 0 then
+            -- Another browse took the house's list of answers from the job.
+            EndBrowse(current, false)
+        end
+    end
+    local found, counts = Cheapest(results)
     local batch = current and current.waiting
     local ours = batch and AnswersBatch(found, batch)
     Record(found, counts, ours and current.options.quiet)
@@ -228,8 +310,22 @@ addon:On("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", function()
 end)
 
 addon:On("AUCTION_HOUSE_BROWSE_RESULTS_ADDED", function(added)
+    local current = scan
+    if current and current.query and current.waiting and current.pages > 0 then
+        -- A page more for a browse job.
+        current.waiting, current.pages = nil, current.pages + 1
+        for _, result in ipairs(added or {}) do current.results[#current.results + 1] = result end
+        Auction:NextPage()
+        return
+    end
     local found = Cheapest(added)
     Record(found)
+end)
+
+-- A browse the house couldn't answer ends with what it has.
+addon:On("AUCTION_HOUSE_BROWSE_FAILURE", function()
+    local current = scan
+    if current and current.query and current.waiting then EndBrowse(current, false) end
 end)
 
 --------------------------------------------------------------------------------
@@ -356,8 +452,9 @@ local quietSearches = {} -- [itemID] = true while a quiet search of it waits for
 
 -- A background search, as the undercut check's, leaves "Searching..." to
 -- the search a pane waits on. A quiet one, a snipe's, also leaves the price
--- history alone.
-function Auction:Search(itemID, background, quiet)
+-- history alone. itemKey: the exact item, with the item level and variant a
+-- browse found it with; without one, the item ID's.
+function Auction:Search(itemID, background, quiet, itemKey)
     if not itemID or not self.isOpen then return false end
     if quiet then quietSearches[itemID] = true end
     if not background then
@@ -372,7 +469,8 @@ function Auction:Search(itemID, background, quiet)
         end)
     end
     return Send(function()
-        local ok, key = pcall(C_AuctionHouse.MakeItemKey, itemID)
+        local ok, key = true, itemKey
+        if not key then ok, key = pcall(C_AuctionHouse.MakeItemKey, itemID) end
         if not (ok and key and pcall(C_AuctionHouse.SendSearchQuery, key, PRICE_SORT, true)) then
             if Auction.searching == itemID then Auction.searching = nil end
             quietSearches[itemID] = nil
@@ -381,10 +479,11 @@ function Auction:Search(itemID, background, quiet)
     end)
 end
 
--- partial: the house holds more offers than the rows kept.
-local function Finish(itemID, commodity, rows, partial)
+-- partial: the house holds more offers than the rows kept. key: the item
+-- key an item search answered for, which a search after a purchase reuses.
+local function Finish(itemID, commodity, rows, partial, key)
     addon:LearnCommodity(itemID, commodity)
-    Auction.results[itemID] = { commodity = commodity, rows = rows, partial = partial, at = GetTime() }
+    Auction.results[itemID] = { commodity = commodity, rows = rows, partial = partial, at = GetTime(), key = key }
     local quiet = quietSearches[itemID]
     quietSearches[itemID] = nil
     if rows[1] then addon:SetPrice(itemID, rows[1].unit, nil, quiet) end
@@ -435,7 +534,7 @@ addon:On("ITEM_SEARCH_RESULTS_UPDATED", function(itemKey)
     end
     table.sort(rows, function(a, b) return a.unit < b.unit end)
     local complete = C_AuctionHouse.HasFullItemSearchResults
-    Finish(itemID, false, rows, total > MAX_ROWS or (complete ~= nil and not complete(itemKey)))
+    Finish(itemID, false, rows, total > MAX_ROWS or (complete ~= nil and not complete(itemKey)), itemKey)
 end)
 
 -- The price to post at to undercut an offer: one step under it, or its own
@@ -557,7 +656,8 @@ function Auction:BuyAuction(itemID, row)
         addon:SetStatus("Not enough gold for " .. addon.Money(row.buyout))
         return
     end
-    SetPending("buying", { itemID = itemID, auctionID = row.auctionID, buyout = row.buyout })
+    local result = self.results[itemID]
+    SetPending("buying", { itemID = itemID, auctionID = row.auctionID, buyout = row.buyout, key = result and result.key })
     if not pcall(C_AuctionHouse.PlaceBid, row.auctionID, row.buyout) then
         self.buying = nil
         addon:SetStatus("The game refused the purchase")
@@ -570,7 +670,7 @@ addon:On("AUCTION_HOUSE_PURCHASE_COMPLETED", function(auctionID)
     if not buying or buying.auctionID ~= auctionID then return end
     Auction.buying = nil
     addon:SetStatus(("Bought %s for %s"):format(addon:ItemName(buying.itemID) or "", addon.Money(buying.buyout)))
-    Auction:Search(buying.itemID)
+    Auction:Search(buying.itemID, nil, nil, buying.key)
 end)
 
 --------------------------------------------------------------------------------
@@ -961,11 +1061,13 @@ end)
 
 addon:On("AUCTION_HOUSE_THROTTLED_MESSAGE_SENT", function() addon:Refresh() end)
 
--- A dropped request gets no answer; don't wait for it.
+-- A dropped request gets no answer; don't wait for it. A browse job waits
+-- for its timeout instead, as the request dropped may be another one, and
+-- ending it would cut a long scan short.
 addon:On("AUCTION_HOUSE_THROTTLED_MESSAGE_DROPPED", function()
     Auction.searching = nil
     if Auction.quote and Auction.quote.pending then Auction.quote = nil end
-    if scan and scan.waiting then
+    if scan and scan.waiting and not scan.query then
         scan.waiting = nil
         Auction:NextBatch()
     end
