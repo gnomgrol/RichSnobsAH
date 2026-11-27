@@ -2,8 +2,9 @@
 -- of the last 30 days, the vendor price, the craft cost when one of your
 -- lists crafts the item or one of your characters knows its recipe, what you
 -- paid for it, and what your sales of it brought. Gear that disenchants also
--- shows what its materials bring after the cut, then each material's chance,
--- amount and price.
+-- shows what its materials bring after the cut, for a green at an Arcane
+-- Salvager when the Disenchant tab's Salvager is ticked, then each
+-- material's chance, amount and price.
 
 local _, addon = ...
 
@@ -58,7 +59,12 @@ local function AddDisenchantLines(tooltip, itemID)
     if not materials then return end
     local value, complete = DE:Value(materials)
     local r, g, b = unpack(LABEL)
-    local label = not complete and "Disenchant, prices missing" or estimate and "Disenchant, estimate" or "Disenchant"
+    local label = materials.salvaged and "Disenchant at a Salvager" or "Disenchant"
+    if not complete then
+        label = label .. ", prices missing"
+    elseif estimate then
+        label = label .. ", estimate"
+    end
     tooltip:AddDoubleLine(label, value > 0 and addon.Money(value) or "-", r, g, b, 1, 1, 1)
     for _, material in ipairs(materials) do
         local amount = material.min == material.max and material.min or ("%d-%d"):format(material.min, material.max)

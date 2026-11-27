@@ -50,10 +50,17 @@ local function Defaults()
                            -- usual price unless max[itemID] holds your own, copper per unit
         floors = {},       -- [itemID] = copper per unit: the Stay cheapest tab never posts under
                            -- it; without one, under break-even
-        disenchant = { armor = true, weapons = true, minItemLevel = 5, maxItemLevel = 999, minProfit = 10000 },
+        disenchant = { armor = true, weapons = true, minItemLevel = 5, maxItemLevel = 999, minProfit = 10000,
+            salvager = false },
                            -- the Disenchant tab's scan: the item classes, the item levels from
                            -- the low end of one band to the high end of another (999: no
-                           -- top), and the least profit a deal leaves, copper
+                           -- top), and the least profit a deal leaves, copper; salvager: you
+                           -- disenchant at an Arcane Salvager, so greens are worth more
+        disenchanted = { salvager = { count = 0, got = 0, expected = 0 },
+            plain = { count = 0, got = 0, expected = 0 } },
+                           -- your greens disenchanted, at an Arcane Salvager and elsewhere: how
+                           -- many, the materials they gave and what the tables expected of them
+                           -- (Disenchant.lua)
         -- lastFullScan = time() of the last whole-house snapshot, for its cooldown
         -- window = where you moved the window, away from the auction house
         -- auctionTab = true when the auction house last closed on this addon's tab
@@ -554,4 +561,31 @@ function addon:FindInBags(itemID, sellable)
             end
         end
     end
+end
+
+-- The bag item its link names so, like a cast's target: its item ID.
+function addon:ItemNamedInBags(name)
+    if not name or name == "" then return nil end
+    for bag = 0, LAST_BAG do
+        for slot = 1, C_Container.GetContainerNumSlots(bag) or 0 do
+            local info = C_Container.GetContainerItemInfo(bag, slot)
+            if info and info.hyperlink and info.hyperlink:match("|h%[(.-)%]|h") == name then return info.itemID end
+        end
+    end
+end
+
+-- The item locked in the bags, like one a spell is cast on: its item ID; nil
+-- when none is, or items of more than one kind are.
+function addon:LockedInBags()
+    local found
+    for bag = 0, LAST_BAG do
+        for slot = 1, C_Container.GetContainerNumSlots(bag) or 0 do
+            local info = C_Container.GetContainerItemInfo(bag, slot)
+            if info and info.isLocked then
+                if found and found ~= info.itemID then return nil end
+                found = info.itemID
+            end
+        end
+    end
+    return found
 end

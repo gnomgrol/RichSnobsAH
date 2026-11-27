@@ -1,9 +1,11 @@
 -- The Disenchant tab: the deals of the last scan, most profit first, each
--- with its price, what its materials bring after the cut, and the profit;
--- hover one for its materials. Below them what to scan for: armor, weapons,
--- a range of the item level bands the materials change at, and the least
--- profit, with the Scan button; the scan's progress, or the last scan's
--- state; and a big button that buys the top deal, an item a click.
+-- with how many of its auctions pay once they were searched, its price, what
+-- its materials bring after the cut, and the profit; hover one for its
+-- materials. Below them what to scan for: armor, weapons, a range of the
+-- item level bands the materials change at, and the least profit; whether
+-- you disenchant at an Arcane Salvager, which makes greens worth more; and
+-- the Scan button. Then the scan's progress, or the last scan's state, and a
+-- big button that buys the top deal, an item a click.
 
 local _, addon = ...
 local UI = addon.UI
@@ -85,14 +87,16 @@ local function UpdateRow(row, data)
         return
     end
 
-    -- A deal: the item with its item level, then price, value and profit.
+    -- A deal: the item, how many of its auctions pay once they were searched,
+    -- and its item level, then price, value and profit.
     local deal = data.deal
     row.icon:SetTexture(addon:ItemIcon(deal.itemID))
     row.icon:Show()
     row.name:SetFontObject("GameFontHighlightSmall")
     row.name:SetTextColor(QualityColor(deal.quality))
     row.name:SetPoint("LEFT", row.icon, "RIGHT", 4, 0)
-    row.name:SetText(("%s  |cff808080%d|r"):format(addon:ItemName(deal.itemID) or "...", deal.level))
+    row.name:SetText(("%s%s  |cff808080%d|r"):format(addon:ItemName(deal.itemID) or "...",
+        deal.count and (" x%d"):format(deal.count) or "", deal.level))
     for i = 1, 3 do row.cells[i]:SetFontObject("GameFontHighlightSmall") end
     SetCell(row, 1, addon.Money(deal.price))
     SetCell(row, 2, addon.Money(deal.value))
@@ -165,6 +169,33 @@ local function BuyWords(deal)
         deal.row ~= nil and Auction:CanAct() and not Auction:Busy()
 end
 
+-- "28% more" or "5% less" than a ratio of 1.
+local function More(ratio)
+    local percent = math.floor((ratio - 1) * 100 + 0.5)
+    if percent < 0 then return ("%d%% less"):format(-percent) end
+    return ("%d%% more"):format(percent)
+end
+
+-- What the Salvager tick counts greens at and where that comes from, then
+-- your greens disenchanted so far.
+local function SalvagerLines()
+    local boost, yours = DE:SalvagerBoost()
+    local there, elsewhere = addon.db.disenchanted.salvager, addon.db.disenchanted.plain
+    local lines = {
+        ("You disenchant at one: greens give %s%s"):format(yours and "" or "about ", More(boost)),
+        yours and ("Measured on your %d greens disenchanted at one"):format(there.count)
+            or ("Players' tests, until you disenchant %d greens at one"):format(DE.MEASURED_AT),
+    }
+    if not yours and there.count > 0 then
+        lines[#lines + 1] = ("Yours so far: %s, from %d"):format(More(there.got / there.expected), there.count)
+    end
+    if elsewhere.count > 0 then
+        lines[#lines + 1] = ("Your %d elsewhere gave %s than expected"):format(elsewhere.count,
+            More(elsewhere.got / elsewhere.expected))
+    end
+    return unpack(lines)
+end
+
 -- A scan's progress: "Step 2 of 4: greens, 1,500 items".
 local function Progress(progress)
     local text = ("Step %d of %d: %s"):format(progress.step, progress.steps, progress.what)
@@ -214,7 +245,8 @@ function UI.CreateDisenchantPane(parent)
     end)
     pane.toBand:SetPoint("LEFT", pane.toLabel, "RIGHT", 6, 0)
 
-    -- ...the least profit a deal leaves, and the Scan button.
+    -- ...the least profit a deal leaves, whether you disenchant at an Arcane
+    -- Salvager, and the Scan button.
     pane.profitLabel = UI.Text(pane, "GameFontHighlight")
     pane.profitLabel:SetPoint("BOTTOMLEFT", 10, 86)
     pane.profitLabel:SetText("Min profit")
@@ -227,6 +259,11 @@ function UI.CreateDisenchantPane(parent)
         UI.Tooltip(self, "Min profit", "Like 1g 50s, or 0 for any profit")
     end)
     pane.minProfit:SetScript("OnLeave", GameTooltip_Hide)
+
+    pane.salvager = Check(pane, "Salvager", function(on) DE:Set("salvager", on) end)
+    pane.salvager:SetPoint("LEFT", pane.minProfit, "RIGHT", 14, 0)
+    pane.salvager:SetScript("OnEnter", function(self) UI.Tooltip(self, "Arcane Salvager", SalvagerLines()) end)
+    pane.salvager:SetScript("OnLeave", GameTooltip_Hide)
 
     pane.scan = UI.Button(pane, "Scan", 100, 22)
     pane.scan:SetPoint("BOTTOMRIGHT", -8, 80)
@@ -303,6 +340,7 @@ function UI.CreateDisenchantPane(parent)
 
         self.armor:SetChecked(settings.armor)
         self.weapons:SetChecked(settings.weapons)
+        self.salvager:SetChecked(settings.salvager)
         self.fromBand:Update()
         self.toBand:Update()
         if not self.minProfit:HasFocus() then self.minProfit:SetText(UI.PlainMoney(settings.minProfit)) end

@@ -29,10 +29,14 @@ function UI.PlaceScrollList(scrollBox, scrollBar, top, bottom)
     scrollBar:SetPoint("BOTTOMLEFT", scrollBox, "BOTTOMRIGHT", 9, 4)
 end
 
-function UI.Tooltip(owner, title, line)
+-- A title and any lines under it.
+function UI.Tooltip(owner, title, ...)
     GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
     GameTooltip:SetText(title)
-    if line then GameTooltip:AddLine(line, 1, 1, 1, true) end
+    for i = 1, select("#", ...) do
+        local line = select(i, ...)
+        if line then GameTooltip:AddLine(line, 1, 1, 1, true) end
+    end
     GameTooltip:Show()
 end
 

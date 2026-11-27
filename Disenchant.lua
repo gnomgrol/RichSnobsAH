@@ -13,6 +13,13 @@
 -- A material is worth its last auction price after the house's cut. An
 -- essence without a price takes the other size's, three lesser to a greater.
 --
+-- At an Arcane Salvager, Forever's Enchanting camp feature, its Boosted
+-- Disenchanting buff raises the chance of bonus materials. Players' tests
+-- found greens giving about 30% more and blues no more; Blizzard gives no
+-- rate. With the tab's Salvager ticked, greens are valued so, or by your own
+-- disenchants once you did 100 greens at one: every green you disenchant
+-- counts its materials against the tables, at a Salvager and elsewhere.
+--
 -- The scan checks the materials' prices, then reads every page of three
 -- browses, one each for green, blue and epic armor and weapons. The house
 -- filters by required level only, so each asks for required levels from ten
@@ -38,8 +45,9 @@ local DE = {
     -- materials' prices, each step after it browses a quality, and items
     -- counts what that browse has read so far.
     progress = nil,
-    -- { itemID, key, level, price, value, profit, complete, estimate, row },
-    -- most profit first; row: the cheapest auction a search found
+    -- { itemID, key, level, price, value, profit, complete, estimate, row, count },
+    -- most profit first; row: the cheapest auction a search found; count: how
+    -- many of the auctions it found leave the minimum profit
     deals = {},
     scannedAt = nil, -- time() when the last scan ended
     scanned = 0,     -- the items the scan read, so far while it runs
@@ -50,6 +58,9 @@ addon.Disenchant = DE
 local ARMOR, WEAPON = 4, 2 -- item class IDs
 local AFTER_CUT = 0.95     -- what a sale leaves after the house's cut
 local VANILLA_TOP = 92     -- vanilla's highest item level; Forever's items above it are estimates
+local SALVAGER = 1.3       -- what greens give at an Arcane Salvager, by players' tests
+local MEASURED_AT = 100    -- your greens disenchanted at one that take over from players' tests
+DE.MEASURED_AT = MEASURED_AT
 local SEARCH_AHEAD = 5     -- top deals kept searched, so Buy has an auction to buy
 local CHECK_KEEP = 120     -- seconds a search's answer stands before the deal is searched again
 local ANSWER_TIMEOUT = 10  -- seconds before a search nobody answered can go again
@@ -154,10 +165,11 @@ local EPIC = {
     { HIGHEST, { NEXUS, 100, 1, 2, 5 / 3 }, estimate = true },
 }
 
-local function Bands(rows)
+-- salvaged: the materials come at an Arcane Salvager.
+local function Bands(rows, salvaged)
     local bands = {}
     for i, row in ipairs(rows) do
-        local materials = {}
+        local materials = { salvaged = salvaged }
         for j = 2, #row do
             local itemID, percent, min, max, avg = unpack(row[j])
             materials[#materials + 1] = { itemID = itemID, percent = percent, min = min, max = max,
@@ -175,6 +187,8 @@ local RULES = {
     [3] = { [ARMOR] = BLUE_BANDS, [WEAPON] = BLUE_BANDS },
     [4] = { [ARMOR] = EPIC_BANDS, [WEAPON] = EPIC_BANDS },
 }
+-- Greens disenchanted at an Arcane Salvager.
+local SALVAGED_GREENS = { [ARMOR] = Bands(GREEN_ARMOR, true), [WEAPON] = Bands(GREEN_WEAPON, true) }
 
 -- Shirts and tabards don't disenchant, nor does gear that can't be worn.
 local NOT_DISENCHANTED = {
@@ -186,12 +200,14 @@ local NOT_DISENCHANTED = {
 --------------------------------------------------------------------------------
 
 -- An item's materials, each { itemID, percent, min, max, avg }, and whether
--- they are an estimate. Nil for an item that doesn't disenchant, and for one
--- the client has no info on yet. level and quality: the auction's, if known.
+-- they are an estimate. With the tab's Salvager ticked, a green's come at a
+-- Salvager. Nil for an item that doesn't disenchant, and for one the client
+-- has no info on yet. level and quality: the auction's, if known.
 function DE:Results(itemID, level, quality)
     if not itemID or addon.NoDisenchant[itemID] then return nil end
     local _, _, _, equipLoc, _, classID = C_Item.GetItemInfoInstant(itemID)
-    local byClass = RULES[quality or C_Item.GetItemQualityByID(itemID)]
+    quality = quality or C_Item.GetItemQualityByID(itemID)
+    local byClass = quality == 2 and addon.db.disenchant.salvager and SALVAGED_GREENS or RULES[quality]
     local bands = byClass and byClass[classID]
     if not bands or not equipLoc or NOT_DISENCHANTED[equipLoc] then return nil end
     level = level or select(4, C_Item.GetItemInfo(itemID))
@@ -214,8 +230,17 @@ function DE:MaterialPrice(itemID)
     if price then return price * other[2] end
 end
 
--- What the materials bring on average after the cut, and whether all of
--- them had a price; one without counts nothing.
+-- What greens give at a Salvager against the tables, and whether that is
+-- yours: your own once you disenchanted enough greens at one, else players'.
+function DE:SalvagerBoost()
+    local mine = addon.db.disenchanted.salvager
+    if mine.count >= MEASURED_AT and mine.expected > 0 then return mine.got / mine.expected, true end
+    return SALVAGER, false
+end
+
+-- What the materials bring on average after the cut, at a Salvager's boost
+-- where they come at one, and whether all of them had a price; one without
+-- counts nothing.
 function DE:Value(materials)
     local value, complete = 0, true
     for _, material in ipairs(materials) do
@@ -226,7 +251,7 @@ function DE:Value(materials)
             complete = false
         end
     end
-    return value * AFTER_CUT, complete
+    return value * (materials.salvaged and self:SalvagerBoost() or 1) * AFTER_CUT, complete
 end
 
 --------------------------------------------------------------------------------
@@ -236,7 +261,8 @@ end
 -- [itemID] = { key, price, quality, level, asked }: each item's cheapest
 -- offer in the last scan; asked: the client was asked for its item level
 local candidates = {}
-local checked = {}    -- [itemID] = { row = its cheapest auction you can buy, nil for none, at = GetTime() }
+local checked = {}    -- [itemID] = { row = its cheapest auction you can buy, nil for none, rows = all of
+                      -- them, cheapest first, at = GetTime() }
 local asking = {}     -- [itemID] = a token while a search of it waits for its answer
 local buying          -- { itemID, auctionID }: the purchase Buy sent
 local dirty = false   -- the deals need working out again
@@ -298,9 +324,18 @@ local function MakeDeal(itemID, candidate, settings)
     local price = check and check.row.buyout or candidate.price
     local profit = value - price
     if profit < settings.minProfit then return nil end
+    -- Once searched, how many of its auctions leave the minimum profit.
+    local count
+    if check then
+        count = 0
+        for _, row in ipairs(check.rows) do
+            if value - row.buyout >= settings.minProfit then count = count + 1 end
+        end
+    end
     return {
         itemID = itemID, key = candidate.key, level = level, quality = candidate.quality, price = price,
         value = value, profit = profit, complete = complete, estimate = estimate, row = check and check.row,
+        count = count,
     }
 end
 
@@ -432,19 +467,16 @@ function DE:Buy(deal)
     Auction:BuyAuction(deal.itemID, deal.row)
 end
 
--- A search's answer: the item's cheapest auction you can buy, or none.
+-- A search's answer: the item's auctions you can buy, cheapest first.
 addon:Listen("RESULTS", function(itemID)
     if not candidates[itemID] then return end
     asking[itemID] = nil
     local result = Auction.results[itemID]
-    local row
+    local rows = {}
     for _, r in ipairs(result and result.rows or {}) do
-        if r.auctionID and not r.own then
-            row = r
-            break
-        end
+        if r.auctionID and not r.own then rows[#rows + 1] = r end
     end
-    checked[itemID] = { row = row, at = GetTime() }
+    checked[itemID] = { row = rows[1], rows = rows, at = GetTime() }
     dirty = true
 end)
 
@@ -518,3 +550,96 @@ end)
 addon:Listen("LOGIN", function()
     for _, itemID in ipairs(MATERIALS) do C_Item.RequestLoadItemDataByID(itemID) end
 end)
+
+--------------------------------------------------------------------------------
+-- Your disenchants
+--------------------------------------------------------------------------------
+
+-- Every green you disenchant counts its materials against what the tables
+-- expect, at a Salvager or elsewhere. The game doesn't say which item a
+-- disenchant was cast on: it is the bag item the cast names, or else the one
+-- it locks as it starts. A cast counts as at a Salvager when its buff was on
+-- you as the cast went or as the loot came, and not at all when the game
+-- wouldn't say. Loot with anything but disenchanting materials isn't a
+-- disenchant's.
+
+local DISENCHANT = 13262 -- the spell
+local BOOSTED = 1283701  -- Boosted Disenchanting, the buff near an Arcane Salvager
+local LOOT_WAIT = 10     -- seconds after the cast that its loot can come
+
+local IS_MATERIAL = {}
+for _, itemID in ipairs(MATERIALS) do IS_MATERIAL[itemID] = true end
+
+local cast -- { castGUID, itemID, boosted, at = GetTime() }: the disenchant on its way
+
+-- Whether you have Boosted Disenchanting; nil when the game won't say.
+local function Boosted()
+    local ok, aura = pcall(C_UnitAuras.GetPlayerAuraBySpellID, BOOSTED)
+    if ok then return aura ~= nil end
+end
+
+addon:On("UNIT_SPELLCAST_SENT", function(unit, target, castGUID, spellID)
+    if unit ~= "player" or spellID ~= DISENCHANT then return end
+    cast = { castGUID = castGUID, itemID = addon:ItemNamedInBags(target), boosted = Boosted(), at = GetTime() }
+end)
+
+addon:On("UNIT_SPELLCAST_START", function(unit, castGUID)
+    if unit == "player" and cast and cast.castGUID == castGUID and not cast.itemID then
+        cast.itemID = addon:LockedInBags()
+    end
+end)
+
+-- A cast that failed or was stopped gives nothing.
+local function Stopped(unit, castGUID)
+    if unit == "player" and cast and cast.castGUID == castGUID then cast = nil end
+end
+addon:On("UNIT_SPELLCAST_FAILED", Stopped)
+addon:On("UNIT_SPELLCAST_FAILED_QUIET", Stopped)
+addon:On("UNIT_SPELLCAST_INTERRUPTED", Stopped)
+
+-- How many materials the loot holds; nil when it holds anything else, or
+-- nothing yet.
+local function LootUnits()
+    local units = 0
+    for slot = 1, GetNumLootItems() do
+        local link = GetLootSlotLink(slot)
+        local itemID = link and tonumber(link:match("item:(%d+)"))
+        if not (itemID and IS_MATERIAL[itemID]) then return nil end
+        local _, _, quantity = GetLootSlotInfo(slot)
+        units = units + math.max(quantity or 1, 1)
+    end
+    if units > 0 then return units end
+end
+
+-- The disenchant's loot: a green counts what it gave.
+local function LootCame()
+    if not cast then return end
+    if GetTime() - cast.at > LOOT_WAIT then
+        cast = nil
+        return
+    end
+    local units = LootUnits()
+    if not units then return end
+    local itemID, before, after = cast.itemID, cast.boosted, Boosted()
+    cast = nil
+    local boosted
+    if before or after then
+        boosted = true
+    elseif before == false and after == false then
+        boosted = false
+    else
+        return
+    end
+    if not itemID or C_Item.GetItemQualityByID(itemID) ~= 2 then return end
+    local materials = DE:Results(itemID, nil, 2)
+    if not materials then return end
+    local expected = 0
+    for _, material in ipairs(materials) do expected = expected + material.percent / 100 * material.avg end
+    local mine = addon.db.disenchanted[boosted and "salvager" or "plain"]
+    mine.count, mine.got, mine.expected = mine.count + 1, mine.got + units, mine.expected + expected
+    -- The deals again: with enough of them, the Salvager's boost is yours.
+    dirty = true
+    addon:Refresh()
+end
+addon:On("LOOT_READY", LootCame)
+addon:On("LOOT_OPENED", LootCame)
