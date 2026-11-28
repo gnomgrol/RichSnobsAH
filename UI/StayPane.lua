@@ -3,10 +3,10 @@
 -- isn't yours: undercut, your cheapest gone, or none of yours up), Cheapest
 -- (yours), Under floor, None in bags and Not checked; each with the
 -- cheapest offer now (red when it's under yours), your lowest and its
--- floor. Right-click one for its floor. Below: the round's posts and
--- deposits with the duration, whether the checks run with Start and Stop,
--- Cancel extras for the items with none left in your bags, and the big
--- Post next.
+-- floor. Right-click one for its floor and how many go up per post. Below:
+-- the round's posts and deposits, the duration, whether the checks run with
+-- Start and Stop, Cancel extras for the items with none left in your bags,
+-- and the big Post next.
 
 local _, addon = ...
 local UI = addon.UI
@@ -59,7 +59,7 @@ local function OnRowClick(row, button)
     local data = row.data
     if not data or data.kind == "group" then return end
     if button == "RightButton" then
-        UI.ShowFloorMenu(UIParent, data.itemID)
+        UI.ShowStayMenu(UIParent, data.itemID)
     else
         UI.ModifiedClick(data.itemID)
     end
@@ -195,7 +195,9 @@ function UI.CreateStayPane(parent)
     pane.state:SetPoint("RIGHT", pane.cancelExtra, "LEFT", -8, 0)
 
     -- One click per post, as the game wants: the first item to post goes up.
-    pane.postNext = UI.Button(pane, "Post next", 120, 40)
+    -- It's what the hotkey clicks here.
+    pane.postNext = UI.Button(pane, "Post next", 120, 40, "RichSnobsAHStayNext")
+    pane.hotkeyButton = pane.postNext
     pane.postNext:SetPoint("BOTTOMLEFT", 8, 8)
     pane.postNext:SetPoint("RIGHT", -8, 0)
     pane.postNext:SetNormalFontObject("GameFontNormalLarge")
@@ -203,7 +205,7 @@ function UI.CreateStayPane(parent)
     pane.postNext:SetDisabledFontObject("GameFontDisableLarge")
     pane.postNext:SetScript("OnClick", function() Stay:PostNext() end)
     pane.postNext:SetScript("OnEnter", function(self)
-        UI.Tooltip(self, "Post next", "Puts up 1 of the first item to post, a step under the cheapest offer")
+        UI.Tooltip(self, "Post next", "Puts up the first item to post, a step under the cheapest offer, or tops up yours")
     end)
     pane.postNext:SetScript("OnLeave", GameTooltip_Hide)
 
@@ -218,7 +220,7 @@ function UI.CreateStayPane(parent)
         self.state:SetText(text)
     end
 
-    -- "Post 1 Linen Cloth at 12s 34c", with the exact price each.
+    -- "Post 5 Linen Cloth at 12s 34c each", with the exact price each.
     function pane:UpdatePostNext()
         local button = self.postNext
         local itemID = Stay.on and Stay:Next()
@@ -230,8 +232,10 @@ function UI.CreateStayPane(parent)
             button:Disable()
         else
             local location = addon:FindInBags(itemID, true)
-            local price = Stay:Price(itemID, addon:IsCommodity(itemID, location))
-            button:SetText(("Post 1 %s at %s"):format(addon:ItemName(itemID) or "...", addon.Money(price, true)))
+            local commodity = addon:IsCommodity(itemID, location)
+            local amount = Stay:Amount(itemID, location, commodity)
+            button:SetText(("Post %d %s at %s%s"):format(amount, addon:ItemName(itemID) or "...",
+                addon.Money(Stay:Price(itemID, commodity), true), amount > 1 and " each" or ""))
             button:SetEnabled(Auction:CanAct() and not Auction:Busy())
         end
     end

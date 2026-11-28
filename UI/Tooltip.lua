@@ -3,8 +3,8 @@
 -- lists crafts the item or one of your characters knows its recipe, what you
 -- paid for it, and what your sales of it brought. Gear that disenchants also
 -- shows what its materials bring after the cut, for a green at an Arcane
--- Salvager when the Disenchant tab's Salvager is ticked, then each
--- material's chance, amount and price.
+-- Salvager when the Salvager is ticked, then each material's chance, amount
+-- and price.
 
 local _, addon = ...
 

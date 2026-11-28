@@ -299,8 +299,10 @@ function UI.CreateSnipePane(parent)
     pane.state:SetPoint("BOTTOMLEFT", 10, 60)
     pane.state:SetPoint("RIGHT", pane.toggle, "LEFT", -8, 0)
 
-    -- One big button for the top deal, so a fresh deal needs no aiming.
-    pane.buyNext = UI.Button(pane, "No deals", 120, 40)
+    -- One big button for the top deal, so a fresh deal needs no aiming, and
+    -- what the hotkey clicks here.
+    pane.buyNext = UI.Button(pane, "No deals", 120, 40, "RichSnobsAHSnipeNext")
+    pane.hotkeyButton = pane.buyNext
     pane.buyNext:SetPoint("BOTTOMLEFT", 8, 8)
     pane.buyNext:SetPoint("RIGHT", -8, 0)
     pane.buyNext:SetNormalFontObject("GameFontNormalLarge")

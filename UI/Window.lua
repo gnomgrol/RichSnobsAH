@@ -1,10 +1,11 @@
--- The one window: your lists, the craft queue, the price lookup or your
--- sales on the left; Buy, Sell, Auctions, Snipe and Stay cheapest on the
--- right; above them a bar with the status line and the Full Auction House
--- Scan. At the auction house it all sits in a fourth tab of Blizzard's
--- auction frame, after Buy, Sell and Auctions. Away from it, the left side
--- is a window of its own that can be moved. Both show the same frames,
--- moved to whichever is open.
+-- The one window: your lists, the craft queue, the price lookup, your sales
+-- or what in your bags disenchants on the left; Buy, Sell, Auctions, Snipe,
+-- Stay cheapest and DE buy on the right; above them a bar with the status
+-- line and the Full Auction House Scan. At the auction house it all sits in
+-- a fourth tab of Blizzard's auction frame, after Buy, Sell and Auctions.
+-- Away from it, the left side is a window of its own that can be moved.
+-- Both show the same frames, moved to whichever is open. A hotkey of your
+-- own clicks the main button of the tab you're on.
 
 local _, addon = ...
 local UI = addon.UI
@@ -33,6 +34,35 @@ local function AtAuctionHouse()
     return panel ~= nil and addon.Auction.isOpen and AuctionHouseFrame:IsShown()
 end
 
+-- The hotkey clicks a pane's main button: Snipe's and DE buy's Buy, Stay
+-- cheapest's Post next, Sell's post or next, and Disenchant's. Its pane is
+-- the one shown on the side whose tab was picked last, else on the other
+-- side; the right side shows only at the auction house. It's an override
+-- binding, held only while the content shows. Bindings can't change in
+-- combat, when the content is closed anyway.
+local leftLast = false -- a left tab was picked after a right one
+
+local function ShownButton(panes)
+    for _, pane in ipairs(panes) do
+        if pane:IsShown() then return pane.hotkeyButton end
+    end
+end
+
+local function HotkeyButton()
+    local left = ShownButton(frame.leftPanes)
+    local right = frame.rightPanes and frame.right:IsShown() and ShownButton(frame.rightPanes)
+    if leftLast then return left or right end
+    return right or left
+end
+
+local function UpdateHotkey()
+    if InCombatLockdown() then return end
+    ClearOverrideBindings(content)
+    local key = addon.db.hotkey
+    local button = key and content:IsVisible() and HotkeyButton()
+    if button then SetOverrideBindingClick(content, true, key, button:GetName()) end
+end
+
 local function ShowTab(index)
     frame.buy:SetShown(index == 1)
     frame.sell:SetShown(index == 2)
@@ -40,6 +70,8 @@ local function ShowTab(index)
     frame.snipe:SetShown(index == 4)
     frame.stay:SetShown(index == 5)
     frame.disenchant:SetShown(index == 6)
+    leftLast = false
+    UpdateHotkey()
 end
 
 -- Picking Prices puts the cursor in its search box.
@@ -48,7 +80,65 @@ local function ShowLeftTab(index)
     frame.queue:SetShown(index == 2)
     frame.prices:SetShown(index == 3)
     frame.sales:SetShown(index == 4)
+    frame.disenchantBags:SetShown(index == 5)
     if index == 3 and content:IsVisible() then frame.prices.search:SetFocus() end
+    leftLast = true
+    UpdateHotkey()
+end
+
+-- Held alone, these wait for the key they go with.
+local MODIFIER_KEYS = { LSHIFT = true, RSHIFT = true, LCTRL = true, RCTRL = true, LALT = true, RALT = true,
+    LMETA = true, RMETA = true }
+
+-- The hotkey's own button: a click, then a key, with Alt, Ctrl or Shift as
+-- you like, sets it; Escape or another click keeps the one before, and a
+-- right-click clears it. The key's release ends the wait, so the press
+-- can't also click the button it was just bound to.
+local function HotkeySetter(parent)
+    local button = UI.Button(parent, "", 150, 20)
+    button:SetNormalFontObject("GameFontNormalSmall")
+    button:SetHighlightFontObject("GameFontHighlightSmall")
+    button:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    function button:Update()
+        local key = addon.db.hotkey
+        self:SetText(self.waiting and "Press a key..." or ("Hotkey: %s"):format(key and GetBindingText(key) or "none"))
+    end
+    local function Wait(self, waiting)
+        self.waiting, self.pressed, self.chord = waiting, nil, nil
+        self:EnableKeyboard(waiting)
+        self:Update()
+    end
+    button:SetScript("OnClick", function(self, mouseButton)
+        if mouseButton == "RightButton" then
+            addon.db.hotkey = nil
+            UpdateHotkey()
+            Wait(self, false)
+        else
+            Wait(self, not self.waiting)
+        end
+    end)
+    button:SetScript("OnKeyDown", function(self, key)
+        if MODIFIER_KEYS[key] then return end
+        self.pressed = key
+        self.chord = key ~= "ESCAPE" and (IsAltKeyDown() and "ALT-" or "") .. (IsControlKeyDown() and "CTRL-" or "")
+            .. (IsShiftKeyDown() and "SHIFT-" or "") .. key or nil
+    end)
+    button:SetScript("OnKeyUp", function(self, key)
+        if key ~= self.pressed then return end
+        if self.chord then
+            addon.db.hotkey = self.chord
+            UpdateHotkey()
+        end
+        Wait(self, false)
+    end)
+    button:SetScript("OnHide", function(self) Wait(self, false) end)
+    button:SetScript("OnEnter", function(self)
+        UI.Tooltip(self, "Hotkey", "Clicks the main button of the tab you're on",
+            "Click, then press a key; right-click clears it")
+    end)
+    button:SetScript("OnLeave", GameTooltip_Hide)
+    button:Update()
+    return button
 end
 
 local function UpdateStatus()
@@ -95,6 +185,7 @@ local function MoveContent(container)
         frame.progress:SetPoint("RIGHT", frame.bar, "RIGHT")
     end
     if panel then panel.note:SetShown(not inTab) end
+    UpdateHotkey()
     return true
 end
 
@@ -179,12 +270,16 @@ local function Create()
     frame.queue = UI.CreateQueuePane(frame.left)
     frame.prices = UI.CreatePricesPane(frame.left)
     frame.sales = UI.CreateSalesPane(frame.left)
-    for _, pane in ipairs({ frame.list, frame.queue, frame.prices, frame.sales }) do
+    frame.disenchantBags = UI.CreateDisenchantBagsPane(frame.left)
+    frame.leftPanes = { frame.list, frame.queue, frame.prices, frame.sales, frame.disenchantBags }
+    for _, pane in ipairs(frame.leftPanes) do
         pane:SetPoint("TOPLEFT", 0, -30)
         pane:SetPoint("BOTTOMRIGHT")
     end
-    frame.leftTabs = UI.Tabs(leftTabBar, { "Lists", "Queue", "Prices", "Sales" }, ShowLeftTab)
+    frame.leftTabs = UI.Tabs(leftTabBar, { "Lists", "Queue", "Prices", "Sales", "Disenchant" }, ShowLeftTab)
     frame.leftTabs:Select(1)
+    frame.hotkey = HotkeySetter(leftTabBar)
+    frame.hotkey:SetPoint("RIGHT")
 
     -- The right side takes the tab's width left over.
     frame.right = CreateFrame("Frame", nil, content, "InsetFrameTemplate")
@@ -200,11 +295,12 @@ local function Create()
     frame.snipe = UI.CreateSnipePane(frame.right)
     frame.stay = UI.CreateStayPane(frame.right)
     frame.disenchant = UI.CreateDisenchantPane(frame.right)
-    for _, pane in ipairs({ frame.buy, frame.sell, frame.auctions, frame.snipe, frame.stay, frame.disenchant }) do
+    frame.rightPanes = { frame.buy, frame.sell, frame.auctions, frame.snipe, frame.stay, frame.disenchant }
+    for _, pane in ipairs(frame.rightPanes) do
         pane:SetPoint("TOPLEFT", 0, -30)
         pane:SetPoint("BOTTOMRIGHT")
     end
-    frame.tabs = UI.Tabs(tabBar, { "Buy", "Sell", "Auctions", "Snipe", "Stay cheapest", "Disenchant" }, ShowTab)
+    frame.tabs = UI.Tabs(tabBar, { "Buy", "Sell", "Auctions", "Snipe", "Stay cheapest", "DE buy" }, ShowTab)
     frame.tabs:Select(1)
 
     MoveContent(frame)
@@ -214,7 +310,10 @@ local function Create()
         UpdateStatus()
         addon:Refresh()
     end)
-    content:SetScript("OnHide", function() addon.Auction:CancelQuote() end)
+    content:SetScript("OnHide", function()
+        addon.Auction:CancelQuote()
+        UpdateHotkey()
+    end)
 
     addon.window = content
 end
@@ -240,7 +339,7 @@ function addon:Toggle()
 end
 
 -- Shows an item in the right pane. tab: "buy" or "sell" switches to it;
--- otherwise Auctions, Snipe, Stay cheapest and Disenchant give way to Buy.
+-- otherwise Auctions, Snipe, Stay cheapest and DE buy give way to Buy.
 function addon:Select(selection, tab)
     self.selected = selection
     if frame then

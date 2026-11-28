@@ -37,6 +37,7 @@ UI\AuctionsPane.lua
 UI\SnipePane.lua
 UI\StayPane.lua
 UI\DisenchantPane.lua
+UI\DisenchantBagsPane.lua
 UI\Window.lua
 UI\Tooltip.lua
 UI\Minimap.lua

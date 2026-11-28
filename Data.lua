@@ -38,8 +38,9 @@ local function Defaults()
                            -- it never makes a reagent for another craft
         sales = {},        -- { t, itemID, name, count, price, cut, cost, char }, oldest first,
                            -- kept for good; from the auction house's mail (Sales.lua)
-        purchases = {},    -- { t, itemID, count, price, char }, oldest first, kept for good;
-                           -- your buyouts at the auction house (Auction.lua)
+        purchases = {},    -- { t, itemID, count, price, char, disenchanted }, oldest first, kept
+                           -- for good; your buyouts at the auction house (Auction.lua);
+                           -- disenchanted: a disenchant of the item counted what it cost
         posted = {},       -- [character] = { [itemID] = { [price each] = time() } }: your
                            -- posts for a month, to tell a sale mail's item (Sales.lua)
         history = { days = {}, weeks = {} }, -- [itemID] = the item's daily and weekly
@@ -50,20 +51,34 @@ local function Defaults()
                            -- usual price unless max[itemID] holds your own, copper per unit
         floors = {},       -- [itemID] = copper per unit: the Stay cheapest tab never posts under
                            -- it; without one, under break-even
+        perPost = {},      -- [itemID] = how many the Stay cheapest tab puts up per post, and
+                           -- keeps up at your price while the cheapest is yours; one without
         disenchant = { armor = true, weapons = true, minItemLevel = 5, maxItemLevel = 999, minProfit = 10000,
-            salvager = false },
-                           -- the Disenchant tab's scan: the item classes, the item levels from
+            salvager = false, maxQuality = 3, askOver = 250000 },
+                           -- the DE buy tab's scan: the item classes, the item levels from
                            -- the low end of one band to the high end of another (999: no
                            -- top), and the least profit a deal leaves, copper; salvager: you
-                           -- disenchant at an Arcane Salvager, so greens are worth more
+                           -- disenchant at an Arcane Salvager, so greens are worth more;
+                           -- maxQuality: the best quality scanned for, 2 to 4 (green to
+                           -- epic); askOver: Buy asks first above this price, copper, 0 never
         disenchanted = { salvager = { count = 0, got = 0, expected = 0 },
             plain = { count = 0, got = 0, expected = 0 } },
                            -- your greens disenchanted, at an Arcane Salvager and elsewhere: how
                            -- many, the materials they gave and what the tables expected of them
                            -- (Disenchant.lua)
+        bagDisenchant = { keepSellers = true, ignored = {} },
+                           -- the Disenchant tab for your bags: keepSellers leaves an item that
+                           -- sells for more than its materials bring out of Disenchant next;
+                           -- ignored[itemID] = true leaves the item out for good
+        disenchantResults = { count = 0, materials = {}, paid = 0, paidFor = 0, last = {} },
+                           -- your disenchants since `since` = time(), the first or a reset: how
+                           -- many, the materials they gave ([itemID] = n), what you paid at the
+                           -- auction house for paidFor of them, and the last ten as
+                           -- { t, itemID, materials } (Disenchant.lua)
         -- lastFullScan = time() of the last whole-house snapshot, for its cooldown
         -- window = where you moved the window, away from the auction house
         -- auctionTab = true when the auction house last closed on this addon's tab
+        -- hotkey = the key for the shown tab's main button, like "SHIFT-F" (Window.lua)
     }
 end
 
@@ -75,7 +90,14 @@ function addon:InitDB()
         RichSnobsAHDB = db
     end
     for key, value in pairs(Defaults()) do
-        if db[key] == nil then db[key] = value end
+        if db[key] == nil then
+            db[key] = value
+        elseif type(value) == "table" and type(db[key]) == "table" then
+            -- A settings table gets the keys added since it was saved.
+            for inner, default in pairs(value) do
+                if db[key][inner] == nil then db[key][inner] = default end
+            end
+        end
     end
 
     local now = time()
@@ -561,6 +583,23 @@ function addon:FindInBags(itemID, sellable)
             end
         end
     end
+end
+
+-- Each item in the bags, in bag order: fn(bag, slot, info).
+function addon:EachBagItem(fn)
+    for bag = 0, LAST_BAG do
+        for slot = 1, C_Container.GetContainerNumSlots(bag) or 0 do
+            local info = C_Container.GetContainerItemInfo(bag, slot)
+            if info then fn(bag, slot, info) end
+        end
+    end
+end
+
+-- How many bag slots are empty.
+function addon:FreeBagSlots()
+    local free = 0
+    for bag = 0, LAST_BAG do free = free + (C_Container.GetContainerNumFreeSlots(bag) or 0) end
+    return free
 end
 
 -- The bag item its link names so, like a cast's target: its item ID.

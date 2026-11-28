@@ -3,7 +3,8 @@
 -- and the profit after the cut.
 -- Next steps through the items on your lists that are in your bags, except
 -- on lists marked not for sale. Any item can be dropped on the header, or
--- right-clicked in your bags while this tab shows (Window.lua).
+-- right-clicked in your bags while this tab shows (Window.lua). The hotkey
+-- posts, or steps on once the item is gone.
 
 local _, addon = ...
 local UI = addon.UI
@@ -167,6 +168,18 @@ function UI.CreateSellPane(parent)
     pane.post:SetPoint("LEFT", pane.next, "RIGHT", 6, 0)
     pane.post:SetPoint("RIGHT", -8, 0)
     pane.post:SetScript("OnClick", function() pane:Post() end)
+
+    -- What the hotkey clicks here, a button of no size: Post when it can;
+    -- else Next, once none of the item is left in your bags or none is
+    -- picked. While its price is coming, nothing.
+    pane.hotkeyButton = CreateFrame("Button", "RichSnobsAHSellNext", pane)
+    pane.hotkeyButton:SetScript("OnClick", function()
+        if pane.post:IsEnabled() then
+            pane:Post()
+        elseif not (pane.itemID and addon:FindInBags(pane.itemID, true)) then
+            pane.next:Click()
+        end
+    end)
 
     function pane:GetPrice()
         return MoneyInputFrame_GetCopper(self.price) or 0

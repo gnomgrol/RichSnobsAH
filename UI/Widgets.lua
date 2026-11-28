@@ -4,8 +4,9 @@
 local _, addon = ...
 local UI = addon.UI
 
-function UI.Button(parent, text, width, height)
-    local button = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+-- name: for a button the hotkey clicks, as a binding names its button.
+function UI.Button(parent, text, width, height, name)
+    local button = CreateFrame("Button", name, parent, "UIPanelButtonTemplate")
     button:SetText(text)
     button:SetSize(width or 100, height or 22)
     return button
@@ -38,6 +39,18 @@ function UI.Tooltip(owner, title, ...)
         if line then GameTooltip:AddLine(line, 1, 1, 1, true) end
     end
     GameTooltip:Show()
+end
+
+-- A tick box with its label beside it; a click on the label ticks it too.
+function UI.Check(parent, label, onClick)
+    local box = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
+    box:SetSize(24, 24)
+    box.label = UI.Text(parent, "GameFontHighlight")
+    box.label:SetPoint("LEFT", box, "RIGHT", 2, 1)
+    box.label:SetText(label)
+    box:SetHitRectInsets(0, -(box.label:GetStringWidth() + 4), 0, 0)
+    box:SetScript("OnClick", function(self) onClick(self:GetChecked() and true or false) end)
+    return box
 end
 
 function UI.ItemLink(itemID)
@@ -110,13 +123,14 @@ function UI.PlainMoney(copper)
     return table.concat(parts, " ")
 end
 
--- An item's floor for Stay cheapest: set your own, or go back to break-even.
--- From the Stay cheapest tab's rows.
-function UI.ShowFloorMenu(owner, itemID)
+-- An item's settings for Stay cheapest, from its tab's rows: the floor, your
+-- own or break-even, and how many go up per post.
+function UI.ShowStayMenu(owner, itemID)
     MenuUtil.CreateContextMenu(owner, function(_, root)
+        local name = addon:ItemName(itemID) or "item"
         local floor, own = addon:Floor(itemID)
         root:CreateButton("Set floor...", function()
-            addon:Prompt(("Least to post one %s at, like 12g 50s:"):format(addon:ItemName(itemID) or "item"),
+            addon:Prompt(("Least to post one %s at, like 12g 50s:"):format(name),
                 floor and UI.PlainMoney(floor) or "", function(text)
                     local copper = UI.ParseMoney(text)
                     if copper then
@@ -132,6 +146,19 @@ function UI.ShowFloorMenu(owner, itemID)
             addon.db.floors[itemID] = nil
             addon:Refresh()
         end):SetEnabled(own)
+        local perPost = addon.Stay:PerPost(itemID)
+        root:CreateButton(("Per post: %d..."):format(perPost), function()
+            addon:Prompt(("How many %s to keep listed at the cheapest:"):format(name), tostring(perPost), function(text)
+                local n = tonumber(text)
+                n = n and math.floor(n)
+                if n and n >= 1 then
+                    addon.db.perPost[itemID] = n > 1 and n or nil
+                    addon:Refresh()
+                else
+                    addon:SetStatus("Not a number: " .. text)
+                end
+            end)
+        end)
     end)
 end
 

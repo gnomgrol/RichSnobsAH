@@ -1,12 +1,16 @@
 -- Stay cheapest for whole lists: the items of the lists ticked "Stay
 -- cheapest" that you have in your bags or up for sale. While on, and while
--- the RichSnobs tab shows at the auction house, one quiet price check of
--- them all runs every couple of seconds, and each item's cheapest offer is
--- held against your own lowest price. Under it, you were undercut; over it,
--- your cheapest one is gone, most likely sold. Either plays a sound, and
--- Post next puts up one more of the first item that needs it, a step under
--- the cheapest, never under its floor. With none left in your bags, Cancel
--- extras takes down all of an item's auctions but your cheapest.
+-- the RichSnobs tab shows at the auction house, your auctions are asked for
+-- and one quiet price check of them all runs every couple of seconds, and
+-- each item's cheapest offer is held against your own lowest price. Under
+-- it, you were undercut; over it, your cheapest one is gone, most likely
+-- sold. Either plays a sound, and Post next puts up the first item that
+-- needs it a step under the cheapest, never under its floor: as many as you
+-- set per post for it, or one a click of an item that isn't a commodity.
+-- While the cheapest is yours, Post next makes up that amount at your price
+-- as yours sell: 10 per post with 6 left up, it puts up 4 more. With none
+-- left in your bags, Cancel extras takes down all of an item's auctions but
+-- your cheapest.
 
 local _, addon = ...
 local Auction = addon.Auction
@@ -23,7 +27,8 @@ addon.Stay = Stay
 local ROUND_PAUSE = 2 -- seconds from one round's end to the next round
 local ALERT_SOUND = SOUNDKIT and SOUNDKIT.READY_CHECK or 8960
 
-local posted = {}    -- [itemID] = { unit, at }: your latest post, until your auctions show it
+local posted = {}    -- [itemID] = { unit, quantity, at, before }: your latest post, until your
+                     -- auctions show it; before: the auction IDs they had of the item then
 local wasYours = {}  -- [itemID] = true while your offer was the cheapest
 local roundQueued = false
 local running = false -- a round's check is out: a Stop and Start meanwhile waits for it
@@ -61,6 +66,27 @@ function Stay:Yours(itemID)
     return low
 end
 
+-- How many of yours are up at your lowest price each, counting a post your
+-- auctions don't show yet.
+function Stay:Listed(itemID)
+    local low = self:Yours(itemID)
+    if not low then return 0 end
+    local post = posted[itemID]
+    local count = post and math.abs(post.unit - low) < 0.5 and post.quantity or 0
+    for _, auction in ipairs(Auction.owned or {}) do
+        if auction.itemID == itemID and not auction.sold and auction.unit and math.abs(auction.unit - low) < 0.5 then
+            count = count + auction.quantity
+        end
+    end
+    return count
+end
+
+-- How many of an item go up per post, and Post next keeps up at your price
+-- while the cheapest is yours: as many as you set for it, else one.
+function Stay:PerPost(itemID)
+    return addon.db.perPost[itemID] or 1
+end
+
 -- The ticked lists' items that you have in your bags or up for sale, each
 -- once, in list order.
 function Stay:Items()
@@ -94,28 +120,37 @@ function Stay:State(itemID)
     return "yours"
 end
 
--- What the next post of an item goes up at: a step under the cheapest
--- offer, or the last price known when nobody has any up; nil without one.
--- Item auctions take whole silver.
+-- What the next post of an item goes up at: your lowest while the cheapest
+-- is yours, else a step under the cheapest offer, or the last price known
+-- when nobody has any up; nil without one. Item auctions take whole silver.
 function Stay:Price(itemID, commodity)
     local cheapest = self.cheapest[itemID]
-    local price = cheapest and Auction:PriceUnder({ unit = cheapest }, commodity) or addon:GetAHPrice(itemID)
+    local price
+    if self:State(itemID) == "yours" then
+        price = self:Yours(itemID)
+    else
+        price = cheapest and Auction:PriceUnder({ unit = cheapest }, commodity) or addon:GetAHPrice(itemID)
+    end
     if price and not commodity then price = math.max(100, math.floor(price / 100) * 100) end
     return price and math.floor(price)
 end
 
--- Whether an item is posted next, or why not: "post", "yours", "floor" (its
--- price would be under the floor), "empty" (none in your bags can be sold),
--- "unchecked" (no check yet, or no price known).
+-- Whether an item is posted next, or why not: "post", "yours" (the cheapest
+-- is yours, with as many up at your price as you set per post, or nothing
+-- to make them up with), "floor" (its price would be under the floor),
+-- "empty" (none in your bags can be sold), "unchecked" (no check yet, or no
+-- price known).
 function Stay:Group(itemID)
     local state = self:State(itemID)
-    if state == "unchecked" or state == "yours" then return state end
+    if state == "unchecked" then return state end
+    local yours = state == "yours"
+    if yours and self:Listed(itemID) >= self:PerPost(itemID) then return "yours" end
     local location = addon:FindInBags(itemID, true)
-    if not location then return "empty" end
+    if not location then return yours and "yours" or "empty" end
     local price = self:Price(itemID, addon:IsCommodity(itemID, location))
     if not price then return "unchecked" end
     local floor = addon:Floor(itemID)
-    if floor and price < floor then return "floor" end
+    if floor and price < floor then return yours and "yours" or "floor" end
     return "post"
 end
 
@@ -126,7 +161,18 @@ function Stay:Next()
     end
 end
 
--- From a click: one more of the next item, at its price.
+-- How many of an item the next post puts up: as many as you set per post,
+-- less those up at your price while the cheapest is yours, at most what
+-- can be posted. An item auction holds one, as on the Sell tab.
+function Stay:Amount(itemID, location, commodity)
+    if not commodity then return 1 end
+    local want = self:PerPost(itemID)
+    if self:State(itemID) == "yours" then want = want - self:Listed(itemID) end
+    local ok, most = pcall(C_AuctionHouse.GetAvailablePostCount, location)
+    return math.min(want, ok and most or addon:BagCount(itemID))
+end
+
+-- From a click: the next item, as many as Amount says, at its price.
 function Stay:PostNext()
     local itemID = self:Next()
     if not itemID then return end
@@ -136,7 +182,8 @@ function Stay:PostNext()
         addon:SetStatus("Search this item once first, so the auction house says how it sells")
         return
     end
-    Auction:Post(itemID, location, commodity, 1, self:Price(itemID, commodity), addon.db.duration)
+    Auction:Post(itemID, location, commodity, self:Amount(itemID, location, commodity), self:Price(itemID, commodity),
+        addon.db.duration)
 end
 
 -- Of the items with none left in your bags, your auctions past the cheapest
@@ -226,6 +273,8 @@ function Round()
     if not CanRun() then return QueueRound() end
     roundStart = GetTime()
     running = true
+    -- Your auctions too: part of one may have sold, which Post next makes up.
+    Auction:QueryOwned()
     local started = Auction:ScanPrices(Stay:Items(), "stay cheapest", {
         quiet = true,
         includeVendor = true,
@@ -248,7 +297,6 @@ function Stay:Start()
     wipe(self.cheapest)
     wipe(posted)
     wipe(wasYours)
-    Auction:QueryOwned()
     Round()
     addon:Refresh()
 end
@@ -271,18 +319,25 @@ addon:Listen("POSTED", function(posting)
     if not (Stay.on and Ticked(itemID)) then return end
     Stay.round.posts = Stay.round.posts + 1
     Stay.round.deposits = Stay.round.deposits + (posting.deposit or 0)
-    posted[itemID] = { unit = posting.unit, at = GetTime() }
+    local before = {}
+    for _, auction in ipairs(Auction.owned or {}) do
+        if auction.itemID == itemID then before[auction.auctionID] = true end
+    end
+    posted[itemID] = { unit = posting.unit, quantity = posting.quantity, at = GetTime(), before = before }
     local cheapest = Stay.cheapest[itemID]
     if not cheapest or posting.unit < cheapest then Stay.cheapest[itemID] = posting.unit end
     wasYours[itemID] = Stay:State(itemID) == "yours"
     addon:Refresh()
 end)
 
--- Your auctions are in: a post they show needs no remembering.
+-- Your auctions are in: a post they show needs no remembering. It shows as
+-- an auction they didn't have when it went up, as a post that makes up the
+-- amount goes up at the price of one you have.
 addon:Listen("OWNED", function()
     for itemID, post in pairs(posted) do
         for _, auction in ipairs(Auction.owned or {}) do
-            if auction.itemID == itemID and auction.unit and math.abs(auction.unit - post.unit) < 0.5 then
+            if auction.itemID == itemID and not post.before[auction.auctionID] and auction.unit
+                and math.abs(auction.unit - post.unit) < 0.5 then
                 posted[itemID] = nil
                 break
             end

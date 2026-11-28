@@ -87,6 +87,9 @@ end
 
 local scan
 local waitingScans = {}
+-- While paused, the request on its way still gets its answer, and the next
+-- one is held (held) until ResumeScans.
+local paused, held = false, false
 
 -- Prices items in batched browse requests. Vendor-bought items are skipped
 -- unless options.includeVendor. options.onBatch(found, batch) gets each
@@ -137,10 +140,28 @@ function Auction:IsScanning()
     return false
 end
 
+-- Holds the checks and browses after the request on their way, so searches
+-- and purchases go out at once; the Disenchant tab's Pause.
+function Auction:PauseScans()
+    paused = true
+end
+
+function Auction:ResumeScans()
+    paused = false
+    if held then
+        held = false
+        self:NextBatch()
+    end
+end
+
 function Auction:NextBatch()
     local current = scan
     if not current then return end
     if current.query then return self:NextPage() end
+    if paused then
+        held = true
+        return
+    end
     current.index = current.index + 1
     local batch = current.batches[current.index]
     local quiet = current.options.quiet
@@ -221,9 +242,10 @@ end
 
 -- A browse job's end. Its prices go in from all its pages at once, as an
 -- item's variants, like each "of the Bear", can sit on different pages.
--- Then the next job starts.
+-- Then the next job starts. A page held by a pause is void with it.
 local function EndBrowse(current, complete)
     current.waiting = nil
+    held = false
     local found, counts = Cheapest(current.results)
     Record(found, complete and counts or nil, current.options.quiet)
     if not current.options.quiet then
@@ -263,6 +285,10 @@ function Auction:NextPage()
     if not (current and current.query) then return end
     if current.options.onProgress then current.options.onProgress(current.results) end
     if current.pages > 0 and C_AuctionHouse.HasFullBrowseResults() then return EndBrowse(current, true) end
+    if paused then
+        held = true
+        return
+    end
     if not current.options.quiet then
         addon:SetStatus(#current.results > 0 and ("Scanning %s: %d items"):format(current.label, #current.results)
             or ("Scanning %s..."):format(current.label))
@@ -1030,6 +1056,7 @@ addon:On("AUCTION_HOUSE_CLOSED", function()
     wipe(queue)
     scan = nil
     wipe(waitingScans)
+    paused, held = false, false
     full = nil
     ownedQueued, checkAfterQuery = false, false
     Auction:CancelQuote()
